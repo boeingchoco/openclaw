@@ -9,6 +9,7 @@ import {
 import { readSessionTranscriptBindingFromProjection } from "../config/sessions/session-accessor.sqlite-transcript-binding.js";
 import type { SessionTranscriptRawDeltaLimits } from "../config/sessions/session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
+import type { SessionArtifactReadQuery } from "../config/sessions/session-history-types.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
@@ -19,7 +20,6 @@ import {
   isSubagentCoordinationHistoryInput,
   type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
-import type { SessionArtifactReadQuery } from "./session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";

@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { finalizePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { restorePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
@@ -154,7 +154,7 @@ describe("resolvePdfModelConfigForTool", () => {
         },
       },
     };
-    const snapshot = finalizePluginMetadataSnapshot(
+    const snapshot = restorePluginMetadataSnapshot(
       createPluginMetadataSnapshotFixture({
         plugins: [
           {

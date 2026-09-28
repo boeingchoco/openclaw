@@ -1,9 +1,5 @@
 // CLI command wrapper for backup archive creation and optional verification.
-import {
-  createBackupArchive,
-  type BackupCreateOptions,
-  type BackupCreateResult,
-} from "../infra/backup-create.js";
+import type { BackupCreateOptions, BackupCreateResult } from "../infra/backup-create.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
@@ -19,6 +15,7 @@ export async function backupCreateCommand(
   runtime: RuntimeEnv,
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
+  const { createBackupArchive } = await import("../infra/backup-create.js");
   let archivePath = opts.output ?? process.cwd();
   const releaseCustody = opts.dryRun ? undefined : beginLifecycleWriteCustody("backup");
   let failure: unknown;

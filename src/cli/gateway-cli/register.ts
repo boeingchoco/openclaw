@@ -22,6 +22,7 @@ import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output
 import {
   addGatewayClientOptions,
   callGatewayFromCliWithTransport,
+  formatGatewayErrorJsonFromCli,
   resolveGatewayRpcOptions,
   resolveGatewayRpcOptionsWithLocalPort,
 } from "../gateway-rpc.js";
@@ -100,16 +101,8 @@ function gatewayAction(action: Parameters<Command["action"]>[0], label?: string)
         rethrowExpectedCliError(err);
       }
       if (json) {
-        const {
-          formatGatewayAuthErrorJson,
-          formatGatewayClientRequestErrorJson,
-          formatGatewayTransportErrorJson,
-        } = await import("../../gateway/call.js");
         defaultRuntime.writeJson(
-          formatGatewayAuthErrorJson(err) ??
-            formatGatewayClientRequestErrorJson(err) ??
-            formatGatewayTransportErrorJson(err) ??
-            formatCliJsonFailure(err),
+          (await formatGatewayErrorJsonFromCli(err)) ?? formatCliJsonFailure(err),
         );
         defaultRuntime.exit(1);
         return;

@@ -2,7 +2,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { prepareModelChoice } from "../model-runtime-choice.js";
-import { callInProcessGatewayTool } from "./in-process-gateway.js";
+import { callInProcessGatewayTool } from "./gateway.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
 const hoisted = vi.hoisted(() => ({ prepareModelChoiceMock: vi.fn<typeof prepareModelChoice>() }));

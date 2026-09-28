@@ -46,7 +46,11 @@ import { compareSemverStrings, resolveNpmChannelTag } from "./update-check.js";
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
 import { resolveDevGitCommits } from "./update-git-metadata.js";
 import { resolveStartupInstallStatus, withUpdateInstallStatus } from "./update-install-status.js";
-import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
+import {
+  runAutoUpdateCommand,
+  runCampaignUpdate,
+  type AutoUpdateRunner,
+} from "./update-startup-auto-run.js";
 import {
   getUpdateSchedule,
   resetUpdateStatusState,
@@ -68,15 +72,6 @@ type UpdateCheckState = {
   autoLastAttemptVersion?: string;
   autoLastAttemptAt?: string;
 };
-
-export async function getUpdateEffectiveChannel(): Promise<UpdateChannel> {
-  const { status } = await initializeGatewayUpdateStatus();
-  return resolveEffectiveUpdateChannel({
-    currentVersion: VERSION,
-    installKind: status.installKind,
-    git: status.git,
-  }).channel;
-}
 
 export function resetUpdateAvailableStateForTest(scheduler: GatewayScheduler): void {
   resetUpdateStatusState();
@@ -239,11 +234,6 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
-/** Caches only the fast local install probe; remote Git refresh remains post-ready. */
-export function initializeGatewayUpdateStatus(): ReturnType<typeof resolveStartupInstallStatus> {
-  return currentUpdateCheckLifecycle().initialize();
-}
-
 function recordAutoUpdateAttempt(version: string): void {
   const attemptAt = resolveUpdateCheckNowMs(Date.now());
   const attemptState = readState();
@@ -298,11 +288,7 @@ async function runGatewayUpdateCheckOwned(
   const cfg = params.getConfig();
   const configChannel = normalizeUpdateChannel(cfg.update?.channel);
   const runAuto: AutoUpdateRunner =
-    params.runAutoUpdate ??
-    (async (runParams) => {
-      const { runAutoUpdateCommand } = await import("./update-startup-auto-run.js");
-      return runAutoUpdateCommand(runParams, params.log);
-    });
+    params.runAutoUpdate ?? ((runParams) => runAutoUpdateCommand(runParams, params.log));
   const autoEnabled = Boolean(cfg.update?.auto?.enabled);
   const autoDisabledByEnv = isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
   if (cfg.update?.checkOnStart === false || autoDisabledByEnv) {

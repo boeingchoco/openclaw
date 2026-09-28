@@ -63,8 +63,6 @@ import {
   summarizeExistingConfig,
   waitForGatewayReachable,
 } from "./onboard-helpers.js";
-import { promptRemoteGatewayConfig } from "./onboard-remote.js";
-import { setupSkills } from "./onboard-skills.js";
 import type { OnboardMode } from "./onboard-types.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
@@ -436,6 +434,7 @@ export async function runConfigureWizard(
     const shouldSkipGatewaySummary = !shouldPromptGatewayRunMode;
 
     if (shouldPromptGatewayRunMode && mode === "remote") {
+      const { promptRemoteGatewayConfig } = await import("./onboard-remote.js");
       let remoteConfig = await promptRemoteGatewayConfig(baseConfig, prompter);
       remoteConfig = applyWizardMetadata(remoteConfig, {
         command: opts.command,
@@ -637,6 +636,7 @@ export async function runConfigureWizard(
         });
       },
       skills: async () => {
+        const { setupSkills } = await import("./onboard-skills.js");
         nextConfig = await setupSkills(
           nextConfig,
           (await resolveSetupTarget()).workspaceDir,

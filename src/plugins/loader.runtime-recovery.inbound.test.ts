@@ -26,11 +26,8 @@ import { getPluginInstance } from "./plugin-instance-scope.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { capturePluginRuntimeRecovery } from "./plugin-runtime-artifact-binding.js";
 import type { PluginRegistry } from "./registry-types.js";
-import {
-  clearActivePluginRegistry,
-  disposePluginRegistryInstances,
-  setActivePluginRegistry,
-} from "./runtime.js";
+import { disposePluginRegistryInstances, setActivePluginRegistry } from "./runtime.js";
+import { clearActivePluginRegistry } from "./runtime.test-support.js";
 
 afterEach(resetPluginLoaderTestStateForTest);
 

@@ -13,7 +13,8 @@ import { bindPluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-ar
 import { resolvePluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
-import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { clearActivePluginRegistry } from "../plugins/runtime.test-support.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";

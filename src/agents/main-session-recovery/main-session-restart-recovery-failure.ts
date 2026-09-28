@@ -11,10 +11,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
-import {
-  commitMainSessionRecovery,
-  type MainSessionRecoveryStoreTarget,
-} from "./main-session-recovery-store.js";
+import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
+import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-types.js";
 import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-recovery-delivery.js";
 import {
   mainSessionRecoveryLog,
