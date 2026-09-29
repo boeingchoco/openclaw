@@ -8,8 +8,11 @@ import {
 import {
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
+  createSessionPlacementSettlementClosedAbortError,
 } from "../../agents/run-termination.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
+import { registerReplyOperationSuccessorBarrier } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -21,6 +24,7 @@ import {
   markDiagnosticRunProgress,
 } from "../../logging/diagnostic-run-activity.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
@@ -137,8 +141,44 @@ export function createWorkerTurnRunOwner(params: {
     abort: cancel,
   } satisfies EmbeddedAgentQueueHandle;
   setActiveEmbeddedRunLifecycleGeneration(handle, lifecycleGeneration);
-  turn.replyOperation?.attachBackend(handle);
-  setActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile, turn.agentId);
+  const completion = createDeferredCore();
+  const settle = async () => {
+    cancel();
+    // Cancellation must join write-capable preparation and possibly dispatched
+    // work. Only the launcher's fenced read waits may detach their source.
+    await completion.promise;
+  };
+  const dispose = () => {
+    turn.replyOperation?.detachBackend(handle);
+    handle.closeDiagnostics();
+    clearActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile);
+    completion.resolve();
+  };
+  try {
+    withSessionPlacementForcedTerminalSettlement(
+      settle,
+      () => {
+        signal.throwIfAborted();
+        if (!params.placements.validateTurnClaim(claim)) {
+          throw createSessionPlacementSettlementClosedAbortError();
+        }
+      },
+      () =>
+        setActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile, turn.agentId),
+    );
+    turn.replyOperation?.attachBackend(handle);
+    if (turn.replyOperation) {
+      registerReplyOperationSuccessorBarrier({
+        operation: turn.replyOperation,
+        sessionId: claim.sessionId,
+        sessionKeys: [sessionKey],
+        start: settle,
+      });
+    }
+  } catch (error) {
+    dispose();
+    throw error;
+  }
   if (!signal.aborted) {
     activeOwners.set(claim.sessionId, owner);
   }
@@ -146,10 +186,7 @@ export function createWorkerTurnRunOwner(params: {
     claim,
     sessionKey,
     signal,
-    dispose: () => {
-      turn.replyOperation?.detachBackend(handle);
-      clearActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile);
-    },
+    dispose,
   };
 }
 

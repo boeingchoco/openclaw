@@ -31,6 +31,7 @@ import {
   StaleWorkerBuildError,
   supportsCurrentWorkerLaunch,
 } from "./admission.js";
+import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
@@ -89,13 +90,23 @@ export async function executeWorkerTurn(
       "Active worker bundle lacks the current launch capability; reprovision the worker before launch",
     );
   }
-  await recoverWorkspaceBeforeTurn(params);
-  const github = await prepareWorkerGitHubBinding({
-    sessionId: placement.sessionId,
-    sessionKey: placement.sessionKey,
-    agentId: placement.agentId,
-    assertCurrent: () => params.placements.validateTurnClaim(params.turnClaim),
-  });
+  await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
+  params.assertRunCurrent?.();
+  turn.abortSignal?.throwIfAborted();
+  // Shared account refresh and repository lookup own their own lifetime. A
+  // cancelled turn may stop waiting, but cannot consume a late binding.
+  const github = await raceNodeWorkerOperation(
+    prepareWorkerGitHubBinding({
+      sessionId: placement.sessionId,
+      sessionKey: placement.sessionKey,
+      agentId: placement.agentId,
+      assertCurrent: () =>
+        !turn.abortSignal?.aborted && params.placements.validateTurnClaim(params.turnClaim),
+    }),
+    turn.abortSignal,
+  );
+  params.assertRunCurrent?.();
+  turn.abortSignal?.throwIfAborted();
 
   const startedAt = Date.now();
   await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
@@ -486,7 +497,11 @@ export async function executeWorkerTurn(
         return;
       }
       dispatchReady = true;
-      params.onHandoff();
+      params.onHandoff(
+        environment.nodeDeviceId && environment.sshEndpoint === null
+          ? { requiresTerminalReceipt: true }
+          : undefined,
+      );
       turn.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
       handoffPending = (async () => {
         try {
