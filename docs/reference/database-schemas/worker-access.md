@@ -78,6 +78,13 @@ cleanup leaves history pending when an accepted write's outcome is unknown; a
 later successful receipt does not clear that uncertainty. Stored formats,
 schemas, and path-redaction rules are unchanged.
 
+Mutable execution also awaits validation, activation, and inspected Git-target
+phase receipts through that worker. The phase transformation and terminal-row
+no-op behavior stay with the existing ledger kernel. After each receipt wait,
+the caller rechecks its original executor and requester before continuing schema
+inspection, native stop, or publication. Accepted writes retain the same signal
+settlement owner; other phase callers keep their current contracts until migrated.
+
 The installed updater still owns its first upgrade hop. Shipped synchronous
 ledger APIs, effect guards, general command progress, and finalization writes
 remain with their existing owners until their separate worker cutovers.
@@ -201,6 +208,15 @@ Scope matching, FTS scan bounds, fire budgets, and hidden-context limits are unc
 Cold agent opening and lease/bootstrap control retain their existing owners; this
 cut does not claim that all agent-database work has left the host thread.
 
+Memory Core origin recording and reservation compensation use that same agent
+writer and a connection-bound worker. Recall staging, backfill, and consolidation
+await their origin writes before publication or releasing the workspace lock.
+Compensation removes only the inserted prefix from its original database;
+uncertain file publication retains the reserved lineage. Missing-store and
+no-match preflights remain noncreating. Read-only origin planning and forget's
+supplied-connection kernels retain their existing owners; this is a mutation cut,
+not a claim that all memory persistence is off the calling thread.
+
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
 provides the typed single-command `execute` method.
@@ -264,6 +280,18 @@ changes. Journal inputs are copied under the existing worker input budget, and
 source and caller authority remain checked at admission and commit. General
 placement getters and lifecycle guards remain separate migration work. Journal
 formats, schemas, pack limits, retention, and update behavior are unchanged.
+
+Worker session-tool grants and operation journals use the same shared-state
+writer. The placement authority owner publishes committed tool grants and fences
+pending revocation, so synchronous tool-grant checks do not query SQLite. Closing a
+turn seals new tool admission immediately, then joins already accepted operation
+settlement before clearing replay state. A committed receipt survives reply loss;
+an uncertain write fences further effects and reports recovery instead of replaying
+the operation or waiting indefinitely. Source, child, and sibling-parent reads use
+the existing session reader worker with incarnation admission and captured physical
+store targets. The retained transcript owner still validates its lifecycle revision
+and writer identity through its existing source guard. Schemas, journal retention,
+restart recovery, and update behavior are unchanged.
 
 Memory session preparation retains only export text, provenance, timestamps, and
 classification/reset facts from each decoded SQLite event. Full-message observers
