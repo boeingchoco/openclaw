@@ -14,14 +14,18 @@ import {
   resolveRegisteredSqliteTranscriptArchiveName,
 } from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { AGENT_DATABASE_MAINTENANCE_LEASE } from "../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-session-transcript-archive-schema.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { cleanupMediaPersistenceFixtures } from "./state-migrations.media-persistence.test-support.js";
+import { TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE } from "./state-migrations.transcript-directives-archives.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 
 type ArchiveEncoding = "identity" | "zstd";
@@ -194,6 +198,29 @@ function expectPreservedIdentity(before: ArchiveRow, after: ArchiveRow): void {
   });
 }
 
+function copyArchiveRow(
+  databasePath: string,
+  copies: readonly { sessionId: string; generation: string; archiveName: string }[],
+): void {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath);
+  try {
+    const insert = database.prepare(`INSERT INTO session_transcript_archives(
+        session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
+        archive_name,created_at,published_at)
+      SELECT ?, ?, session_key, reason, encoding, archive_blob, archive_sha256,
+        ?, created_at, published_at FROM session_transcript_archives
+      WHERE session_id = ? AND generation = ?`);
+    database.exec("BEGIN");
+    for (const copy of copies) {
+      insert.run(copy.sessionId, copy.generation, copy.archiveName, sessionId, generation);
+    }
+    database.exec("COMMIT");
+  } finally {
+    database.close();
+  }
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   cleanupMediaPersistenceFixtures(tempDirs);
@@ -202,26 +229,20 @@ afterEach(() => {
 describe("media migration of canonical SQLite transcript archives", () => {
   it("seeks across archive batches without skipping retained generations", async () => {
     const f = fixture({ fileContent: null });
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(f.databasePath);
-    try {
-      const insert = database.prepare(`INSERT INTO session_transcript_archives(
-          session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
-          archive_name,created_at,published_at)
-        SELECT ?, ?, session_key, reason, encoding, archive_blob, archive_sha256,
-          ?, created_at, published_at FROM session_transcript_archives
-        WHERE session_id = ? AND generation = ?`);
-      database.exec("BEGIN");
-      for (const session of ["a", "b", "c"]) {
-        for (let index = 0; index < 40; index++) {
+    copyArchiveRow(
+      f.databasePath,
+      ["a", "b", "c"].flatMap((session) =>
+        Array.from({ length: 40 }, (_, index) => {
           const retained = String(index).padStart(3, "0");
-          insert.run(session, retained, `${session}-${retained}.jsonl`, sessionId, generation);
-        }
-      }
-      database.exec("COMMIT");
-    } finally {
-      database.close();
-    }
+          return {
+            sessionId: session,
+            generation: retained,
+            archiveName: `${session}-${retained}.jsonl`,
+          };
+        }),
+      ),
+    );
+    const { DatabaseSync } = requireNodeSqlite();
     // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted database receiver.
     const prepare = DatabaseSync.prototype.prepare;
     const plans: string[] = [];
@@ -284,6 +305,117 @@ describe("media migration of canonical SQLite transcript archives", () => {
       changes: [],
       warnings: result.warnings,
       warningDisposition: "recoverable",
+    });
+  });
+
+  it("verifies unchanged archives without re-checking the maintenance owner for each one", async () => {
+    const single = fixture({ content: canonicalContent });
+    const many = fixture({ content: canonicalContent });
+    const copies = Array.from(
+      { length: 2 * TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE },
+      (_, index) => ({
+        sessionId: `retained-${index}`,
+        generation,
+        archiveName: `retained-${index}.jsonl`,
+      }),
+    );
+    copyArchiveRow(many.databasePath, copies);
+    for (const copy of copies) {
+      fs.copyFileSync(many.archivePath, path.join(many.archiveDirectory, copy.archiveName));
+    }
+    // Doctor's owner policy re-reads update admission in a child process on every check.
+    const countOwnerChecks = async (env: NodeJS.ProcessEnv) => {
+      let checks = 0;
+      const scope = createOpenClawDatabaseMaintenanceScope({
+        assertOwnerCurrent: () => {
+          checks += 1;
+        },
+      });
+      try {
+        expect(await scope.run(() => migrateLegacyMediaPersistence({ env }))).toEqual({
+          changes: [],
+          warnings: [],
+        });
+      } finally {
+        await scope.close();
+      }
+      return checks;
+    };
+    const singleChecks = await countOwnerChecks(single.env);
+    expect((await countOwnerChecks(many.env)) - singleChecks).toBeLessThan(copies.length);
+  });
+
+  it("repairs a stale copy in a batch that also holds current and missing copies", async () => {
+    const f = fixture({ content: canonicalContent });
+    const copies = ["current", "missing", "stale"].map((name) => ({
+      sessionId: `${name}-copy`,
+      generation,
+      archiveName: `${name}-copy.jsonl`,
+    }));
+    copyArchiveRow(f.databasePath, copies);
+    fs.copyFileSync(f.archivePath, path.join(f.archiveDirectory, "current-copy.jsonl"));
+    fs.writeFileSync(
+      path.join(f.archiveDirectory, "stale-copy.jsonl"),
+      encode(legacyContent, "identity"),
+    );
+    const result = await migrateLegacyMediaPersistence({ env: f.env });
+    expect(result).toMatchObject({ changes: [], warningDisposition: "recoverable" });
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Missing 1 canonical transcript archive file(s)"),
+      `Missing canonical transcript archive copy: ${path.join(f.archiveDirectory, "missing-copy.jsonl")}`,
+    ]);
+    expect(fs.readFileSync(path.join(f.archiveDirectory, "stale-copy.jsonl"))).toEqual(
+      Buffer.from(f.read().archive_blob),
+    );
+  });
+
+  it("keeps the directive cursor when maintenance expires while verifying unchanged archives", async () => {
+    const f = fixture({ content: canonicalContent });
+    const { DatabaseSync } = requireNodeSqlite();
+    // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted database receiver.
+    const prepare = DatabaseSync.prototype.prepare;
+    let expired = false;
+    const observed = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql,
+    ) {
+      // The cursor reread runs after the archive was verified, inside the same transaction.
+      if (
+        !expired &&
+        sql.startsWith('select "archive_blob", "archive_sha256" from "session_transcript_archives"')
+      ) {
+        expired = true;
+        openOpenClawStateDatabase({ env: f.env })
+          .db.prepare("UPDATE state_leases SET expires_at = ? WHERE scope = ? AND lease_key = ?")
+          .run(
+            Date.now() - 1,
+            AGENT_DATABASE_MAINTENANCE_LEASE.scope,
+            AGENT_DATABASE_MAINTENANCE_LEASE.key,
+          );
+      }
+      return prepare.call(this, sql);
+    });
+    const result = await migrateHistoricalTranscriptDirectives({ env: f.env }).finally(() =>
+      observed.mockRestore(),
+    );
+    expect(expired).toBe(true);
+    expect(result.warnings.some((warning) => warning.includes("maintenance lease"))).toBe(true);
+    const database = new DatabaseSync(f.databasePath, { readOnly: true });
+    try {
+      const cursor = database
+        .prepare("SELECT app_version FROM schema_meta WHERE meta_key = ?")
+        .get("historical-transcript-directives-v1") as { app_version: string };
+      expect(JSON.parse(cursor.app_version)).toEqual({
+        generation: "",
+        phase: "archives",
+        sessionId: "",
+      });
+    } finally {
+      database.close();
+    }
+    expect(await migrateHistoricalTranscriptDirectives({ env: f.env })).toEqual({
+      changes: [],
+      warnings: [],
     });
   });
 

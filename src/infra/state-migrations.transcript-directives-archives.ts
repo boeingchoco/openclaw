@@ -253,10 +253,10 @@ function rewriteArchiveRow(database: DatabaseSync, planned: ArchiveRowPlan): boo
   return true;
 }
 
-function repairPublishedArchiveFile(params: {
-  archiveDirectory: string;
-  planned: ArchiveRowPlan;
-}): boolean {
+function readPublishedArchiveFile(params: { archiveDirectory: string; planned: ArchiveRowPlan }): {
+  archivePath: string;
+  state: "current" | "missing" | "stale";
+} {
   const archiveDirectory = path.resolve(params.archiveDirectory);
   const archivePath = path.resolve(archiveDirectory, params.planned.archiveName);
   if (
@@ -266,10 +266,19 @@ function repairPublishedArchiveFile(params: {
     throw new Error(`Cannot migrate transcript archive outside ${archiveDirectory}`);
   }
   if (!fs.existsSync(archivePath)) {
-    return false;
+    return { archivePath, state: "missing" };
   }
-  if (sha256Hex(fs.readFileSync(archivePath)) === params.planned.nextSha256) {
-    return true;
+  const current = sha256Hex(fs.readFileSync(archivePath)) === params.planned.nextSha256;
+  return { archivePath, state: current ? "current" : "stale" };
+}
+
+function repairPublishedArchiveFile(params: {
+  archiveDirectory: string;
+  planned: ArchiveRowPlan;
+}): boolean {
+  const { archivePath, state } = readPublishedArchiveFile(params);
+  if (state !== "stale") {
+    return state === "current";
   }
   assertAgentDatabaseMaintenanceAuthority();
   replaceFileAtomicSync({
@@ -293,6 +302,33 @@ function repairPublishedArchiveFile(params: {
     throw new Error(`Transcript archive verification failed for ${archivePath}`);
   }
   return true;
+}
+
+type WriteFreeArchive = { planned: ArchiveRowPlan; archivePath: string; fileCurrent: boolean };
+
+/** Undefined unless no archive in the batch needs a blob or file write. */
+function readWriteFreeArchiveBatch(
+  archiveDirectory: string,
+  batch: readonly ArchiveRowPlan[],
+): WriteFreeArchive[] | undefined {
+  const entries: WriteFreeArchive[] = [];
+  for (const planned of batch) {
+    if (planned.changed) {
+      return undefined;
+    }
+    let file: ReturnType<typeof readPublishedArchiveFile>;
+    try {
+      file = readPublishedArchiveFile({ archiveDirectory, planned });
+    } catch {
+      // The per-row protocol repeats this read and reports its error after earlier rows commit.
+      return undefined;
+    }
+    if (file.state === "stale") {
+      return undefined;
+    }
+    entries.push({ planned, archivePath: file.archivePath, fileCurrent: file.state === "current" });
+  }
+  return entries;
 }
 
 function finalizeArchiveCursor(params: {
@@ -347,6 +383,12 @@ export async function migrateCanonicalTranscriptArchives(
   let rewrittenArchives = 0;
   let missingCopies = 0;
   const missingCopyExamples: string[] = [];
+  const recordMissingCopy = (archivePath: string) => {
+    missingCopies += 1;
+    if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
+      missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
+    }
+  };
   let cursor = params.start;
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
     agentId: params.agentId,
@@ -383,52 +425,88 @@ export async function migrateCanonicalTranscriptArchives(
             : [],
       };
     }
-    for (const planned of batch) {
-      const archivePath = path.resolve(archiveDirectory, planned.archiveName);
-      params.onArchive?.(archivePath);
-      const rowPresent = runSqliteImmediateTransactionSync(
-        params.database,
-        () => {
-          assertAgentDatabaseMaintenanceAuthority();
-          const currentRowPresent = rewriteArchiveRow(params.database, planned);
-          assertAgentDatabaseMaintenanceAuthority();
-          return currentRowPresent;
-        },
-        {
-          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-          databaseLabel: params.pathname,
-          operationLabel: "historical-transcript-archive-directives",
-        },
-      );
-      const fileCurrent = rowPresent
-        ? repairPublishedArchiveFile({ archiveDirectory, planned })
-        : false;
-      if (rowPresent && !fileCurrent) {
-        missingCopies += 1;
-        if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
-          missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
-        }
+    // Each authority check re-reads Doctor's update admission, and each read launches
+    // a content-version child. A batch with no blob or file write is verified and
+    // passed in one transaction instead of two per archive.
+    const writeFree = readWriteFreeArchiveBatch(archiveDirectory, batch);
+    if (writeFree) {
+      for (const entry of writeFree) {
+        params.onArchive?.(entry.archivePath);
       }
-      runSqliteImmediateTransactionSync(
+      const rowsPresent = runSqliteImmediateTransactionSync(
         params.database,
         () => {
           assertAgentDatabaseMaintenanceAuthority();
-          finalizeArchiveCursor({
-            database: params.database,
-            fileCurrent,
-            planned,
-            writeCursor: params.writeCursor,
+          const present = writeFree.map((entry) => {
+            const rowPresent = rewriteArchiveRow(params.database, entry.planned);
+            finalizeArchiveCursor({
+              database: params.database,
+              fileCurrent: rowPresent && entry.fileCurrent,
+              planned: entry.planned,
+              writeCursor: params.writeCursor,
+            });
+            return rowPresent;
           });
           assertAgentDatabaseMaintenanceAuthority();
+          return present;
         },
         {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
           databaseLabel: params.pathname,
-          operationLabel: "historical-transcript-archive-cursor",
+          operationLabel: "historical-transcript-archive-verify",
         },
       );
-      rewrittenArchives += planned.changed && rowPresent ? 1 : 0;
-      cursor = { generation: planned.generation, sessionId: planned.sessionId };
+      for (const [index, entry] of writeFree.entries()) {
+        if (rowsPresent[index] && !entry.fileCurrent) {
+          recordMissingCopy(entry.archivePath);
+        }
+        cursor = { generation: entry.planned.generation, sessionId: entry.planned.sessionId };
+      }
+    } else {
+      for (const planned of batch) {
+        const archivePath = path.resolve(archiveDirectory, planned.archiveName);
+        params.onArchive?.(archivePath);
+        const rowPresent = runSqliteImmediateTransactionSync(
+          params.database,
+          () => {
+            assertAgentDatabaseMaintenanceAuthority();
+            const currentRowPresent = rewriteArchiveRow(params.database, planned);
+            assertAgentDatabaseMaintenanceAuthority();
+            return currentRowPresent;
+          },
+          {
+            busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+            databaseLabel: params.pathname,
+            operationLabel: "historical-transcript-archive-directives",
+          },
+        );
+        const fileCurrent = rowPresent
+          ? repairPublishedArchiveFile({ archiveDirectory, planned })
+          : false;
+        if (rowPresent && !fileCurrent) {
+          recordMissingCopy(archivePath);
+        }
+        runSqliteImmediateTransactionSync(
+          params.database,
+          () => {
+            assertAgentDatabaseMaintenanceAuthority();
+            finalizeArchiveCursor({
+              database: params.database,
+              fileCurrent,
+              planned,
+              writeCursor: params.writeCursor,
+            });
+            assertAgentDatabaseMaintenanceAuthority();
+          },
+          {
+            busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+            databaseLabel: params.pathname,
+            operationLabel: "historical-transcript-archive-cursor",
+          },
+        );
+        rewrittenArchives += planned.changed && rowPresent ? 1 : 0;
+        cursor = { generation: planned.generation, sessionId: planned.sessionId };
+      }
     }
     // Archive planning and file publication are synchronous. Give the lease
     // heartbeat a scheduling point before the next bounded batch begins.
