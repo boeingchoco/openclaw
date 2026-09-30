@@ -628,6 +628,7 @@ src/infra/delivery-queue-sqlite.types.ts
 src/infra/diagnostic-event-listener-presence.ts
 src/infra/diagnostic-event-snapshot.ts
 src/infra/diagnostic-events.ts
+src/infra/diagnostic-flags-env.ts
 src/infra/diagnostic-flags.ts
 src/infra/diagnostic-model-request-provenance.ts
 src/infra/diagnostic-otel-listener-provenance.ts
