@@ -20,6 +20,7 @@ it("loads legacy overrides with canonical precedence and replaces them on reload
       "app.clear": 42,
       exit: ["ctrl+q", 1],
       "extra.a": [],
+      toString: "ctrl+b",
       submit: ["enter", "ctrl+j"],
     }),
   );
@@ -36,7 +37,9 @@ it("loads legacy overrides with canonical precedence and replaces them on reload
     "app.message.followUp",
     "extra.a",
     "extra.z",
+    "toString",
   ]);
+  expect(manager.getUserBindings().toString).toBe("ctrl+b");
 
   await writeFile(configPath, JSON.stringify({ followUp: "ctrl+g" }));
   manager.reload();

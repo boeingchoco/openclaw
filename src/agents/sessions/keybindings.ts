@@ -3,7 +3,7 @@
  *
  * Wraps pi-tui keybindings with OpenClaw-specific actions and per-agent overrides.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type Keybinding,
@@ -228,7 +228,7 @@ const KEYBINDING_NAME_MIGRATIONS = {
 } as const satisfies Record<string, Keybinding>;
 
 function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAME_MIGRATIONS {
-  return key in KEYBINDING_NAME_MIGRATIONS;
+  return Object.hasOwn(KEYBINDING_NAME_MIGRATIONS, key);
 }
 
 /** Migrates legacy keybinding names and orders known entries ahead of unknown extras. */
@@ -267,25 +267,13 @@ function orderKeybindingsConfig(config: KeybindingsConfig): KeybindingsConfig {
   return ordered;
 }
 
-function loadRawConfig(path: string): Record<string, unknown> | undefined {
-  if (!existsSync(path)) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Keybinding manager that loads OpenClaw defaults plus optional user overrides. */
 export class KeybindingsManager extends TuiKeybindingsManager {
-  private configPath: string | undefined;
-
-  constructor(userBindings: KeybindingsConfig = {}, configPath?: string) {
+  constructor(
+    userBindings: KeybindingsConfig = {},
+    private configPath?: string,
+  ) {
     super(KEYBINDINGS, userBindings);
-    this.configPath = configPath;
   }
 
   /** Creates a manager from the agent keybindings.json file. */
@@ -309,11 +297,12 @@ export class KeybindingsManager extends TuiKeybindingsManager {
   }
 
   private static loadFromFile(path: string): KeybindingsConfig {
-    const rawConfig = loadRawConfig(path);
-    if (!rawConfig) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+      return isRecord(parsed) ? migrateKeybindingsConfig(parsed) : {};
+    } catch {
       return {};
     }
-    return migrateKeybindingsConfig(rawConfig);
   }
 }
 

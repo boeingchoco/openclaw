@@ -758,18 +758,7 @@ export abstract class AgentSessionBase {
   }
 
   protected normalizePromptGuidelines(guidelines: string[] | undefined): string[] {
-    if (!guidelines || guidelines.length === 0) {
-      return [];
-    }
-
-    const unique = new Set<string>();
-    for (const guideline of guidelines) {
-      const normalized = guideline.trim();
-      if (normalized.length > 0) {
-        unique.add(normalized);
-      }
-    }
-    return Array.from(unique);
+    return [...new Set(guidelines?.map((guideline) => guideline.trim()).filter(Boolean))];
   }
 
   protected collectActiveToolPromptMetadata(toolNames: string[]): ActiveToolPromptMetadata {
