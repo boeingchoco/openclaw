@@ -68,7 +68,9 @@ are available.
 
 <Note>
 On Docker-backed OpenClaw sandbox hosts (`agents.defaults.sandbox.mode` set to
-a Docker backend), `openclaw doctor` checks the user namespace with `unshare`.
+a Docker backend), standalone `openclaw doctor` checks the user namespace with `unshare`.
+These Codex bwrap checks are omitted during `openclaw update`; run
+`openclaw doctor` after the update.
 When Docker sandbox network egress is disabled and a local Codex runtime is
 configured, it also runs the configured Codex binary's own `workspace-write`
 sandbox with network access disabled, exercising Bubblewrap's loopback setup.

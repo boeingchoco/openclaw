@@ -232,9 +232,14 @@ export async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<vo
   const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
     await import("../commands/doctor-sandbox.js");
   await maybeRepairSandboxRegistryFiles(ctx.prompter);
-  ctx.cfg = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter, {
+  ctx.cfg = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+  noteSandboxScopeWarnings(ctx.cfg);
+}
+
+export async function runCodexBwrapHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteCodexBwrapNamespaceWarnings } = await import("../commands/doctor-sandbox.js");
+  await noteCodexBwrapNamespaceWarnings(ctx.cfg, {
     env: ctx.env,
     cwd: resolveDoctorWorkspaceDir(ctx.cfg, ctx.env),
   });
-  noteSandboxScopeWarnings(ctx.cfg);
 }

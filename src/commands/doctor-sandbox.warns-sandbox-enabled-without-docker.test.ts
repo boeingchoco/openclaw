@@ -63,9 +63,10 @@ const {
   legacySandboxRegistryInspectionToRepairEffect,
   maybeRepairSandboxImages,
   maybeRepairSandboxRegistryFiles,
+  noteCodexBwrapNamespaceWarnings,
 } = await import("./doctor-sandbox.js");
 
-describe("maybeRepairSandboxImages", () => {
+describe("sandbox health", () => {
   const mockRuntime: RuntimeEnv = {
     log: vi.fn(),
     error: vi.fn(),
@@ -192,6 +193,56 @@ describe("maybeRepairSandboxImages", () => {
     });
   });
 
+  it("repairs sandbox images without running Codex namespace diagnostics", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    runExec.mockResolvedValue({ stdout: "", stderr: "" });
+    try {
+      await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
+    } finally {
+      platformSpy.mockRestore();
+    }
+    expect(runExec).toHaveBeenCalledWith("docker", ["image", "inspect", "default-image"], {
+      timeoutMs: 5_000,
+    });
+    expect(runExec.mock.calls.some(([command]) => command === "unshare")).toBe(false);
+    expect(resolveCodexHealthApi).not.toHaveBeenCalled();
+    expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "unavailable engine",
+      platform: "linux",
+      cfg: createSandboxConfig("all"),
+      engine: false,
+    },
+    { name: "non-Linux host", platform: "darwin", cfg: createSandboxConfig("all"), engine: true },
+    { name: "disabled sandbox", platform: "linux", cfg: createSandboxConfig("off"), engine: true },
+    { name: "unconfigured sandbox", platform: "linux", cfg: {}, engine: true },
+    {
+      name: "non-container backend",
+      platform: "linux",
+      cfg: { agents: { defaults: { sandbox: { mode: "all", backend: "ssh" } } } },
+      engine: true,
+    },
+  ] as const)("skips Codex diagnostics for $name", async ({ platform, cfg, engine }) => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    if (engine) {
+      runExec.mockResolvedValue({ stdout: "", stderr: "" });
+    } else {
+      runExec.mockRejectedValue(new Error("Docker not installed"));
+    }
+    try {
+      await noteCodexBwrapNamespaceWarnings(cfg);
+    } finally {
+      platformSpy.mockRestore();
+    }
+    expect(runExec.mock.calls.some(([command]) => command === "unshare")).toBe(false);
+    expect(resolveCodexHealthApi).not.toHaveBeenCalled();
+    expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("warns when Codex bwrap namespaces are blocked on a sandboxed Linux host", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     runExec.mockImplementation(async (command: string, args: string[]) => {
@@ -207,7 +258,7 @@ describe("maybeRepairSandboxImages", () => {
     });
 
     try {
-      await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
+      await noteCodexBwrapNamespaceWarnings(createSandboxConfig("all"));
     } finally {
       platformSpy.mockRestore();
     }
@@ -237,7 +288,7 @@ describe("maybeRepairSandboxImages", () => {
     const options = { env: { PATH: "/service/bin" }, cwd: "/service/workspace" };
 
     try {
-      await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter, options);
+      await noteCodexBwrapNamespaceWarnings(cfg, options);
     } finally {
       platformSpy.mockRestore();
     }
@@ -271,7 +322,7 @@ describe("maybeRepairSandboxImages", () => {
       denial,
     });
     try {
-      await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
+      await noteCodexBwrapNamespaceWarnings(createSandboxConfig("all"));
     } finally {
       platformSpy.mockRestore();
     }
@@ -294,11 +345,7 @@ describe("maybeRepairSandboxImages", () => {
     });
 
     try {
-      await maybeRepairSandboxImages(
-        createSandboxConfigWithDockerNetwork("bridge"),
-        mockRuntime,
-        mockPrompter,
-      );
+      await noteCodexBwrapNamespaceWarnings(createSandboxConfigWithDockerNetwork("bridge"));
     } finally {
       platformSpy.mockRestore();
     }
@@ -340,7 +387,7 @@ describe("maybeRepairSandboxImages", () => {
       reason: scenario.reason,
     });
     try {
-      await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
+      await noteCodexBwrapNamespaceWarnings(createSandboxConfig("all"));
     } finally {
       platformSpy.mockRestore();
     }
@@ -371,7 +418,7 @@ describe("maybeRepairSandboxImages", () => {
         );
       }
       try {
-        await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
+        await noteCodexBwrapNamespaceWarnings(createSandboxConfig("all"));
       } finally {
         platformSpy.mockRestore();
       }

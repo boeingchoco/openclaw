@@ -132,9 +132,6 @@ async function probeCodexBwrapNamespaces(
   cfg: OpenClawConfig,
   options: SandboxHealthOptions,
 ): Promise<CodexBwrapNamespaceProbe> {
-  if (process.platform !== "linux") {
-    return { ok: true };
-  }
   const userProbe = await runCodexBwrapNamespaceProbe("user", [
     "--user",
     "--map-root-user",
@@ -183,11 +180,35 @@ async function probeCodexBwrapNamespaces(
   }
 }
 
-async function noteCodexBwrapNamespaceWarning(
+/** Resolves the enabled sandbox backend and its local container engine, when it has one. */
+function resolveEnabledSandboxBackend(cfg: OpenClawConfig) {
+  const sandbox = cfg.agents?.defaults?.sandbox;
+  const mode = sandbox?.mode ?? "off";
+  if (!sandbox || mode === "off") {
+    return undefined;
+  }
+  const backend = (sandbox.backend?.trim() || "docker").toLowerCase();
+  const containerEngine =
+    backend === "podman"
+      ? PODMAN_SANDBOX_ENGINE
+      : backend === "docker"
+        ? DOCKER_SANDBOX_ENGINE
+        : undefined;
+  return { sandbox, mode, backend, containerEngine };
+}
+
+export async function noteCodexBwrapNamespaceWarnings(
   cfg: OpenClawConfig,
-  engineName: "Docker" | "Podman",
-  options: SandboxHealthOptions,
+  options: SandboxHealthOptions = {},
 ): Promise<void> {
+  const containerEngine = resolveEnabledSandboxBackend(cfg)?.containerEngine;
+  if (process.platform !== "linux" || !containerEngine) {
+    return;
+  }
+  if (!(await isContainerEngineAvailable(containerEngine.command))) {
+    return;
+  }
+  const engineName = containerEngine.displayName;
   const probe = await probeCodexBwrapNamespaces(cfg, options);
   if (probe.ok) {
     return;
@@ -286,22 +307,19 @@ async function handleMissingSandboxImage(
 /**
  * Checks configured sandbox images and optionally runs repo build scripts for missing defaults.
  *
- * Non-container backends skip image checks; local container mode also probes Codex bwrap namespace
- * support because nested app-server shells rely on host user/network namespace policy.
+ * Non-container backends skip image checks.
  */
 export async function maybeRepairSandboxImages(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
-  options: SandboxHealthOptions = {},
 ): Promise<OpenClawConfig> {
-  const sandbox = cfg.agents?.defaults?.sandbox;
-  const mode = sandbox?.mode ?? "off";
-  if (!sandbox || mode === "off") {
+  const enabled = resolveEnabledSandboxBackend(cfg);
+  if (!enabled) {
     return cfg;
   }
-  const backend = (sandbox.backend?.trim() || "docker").toLowerCase();
-  if (backend !== "docker" && backend !== "podman") {
+  const { sandbox, mode, backend, containerEngine } = enabled;
+  if (!containerEngine) {
     if (sandbox.browser?.enabled) {
       note(
         `Sandbox backend "${backend}" selected. Docker browser health checks are skipped; browser sandbox currently requires the docker backend.`,
@@ -310,7 +328,6 @@ export async function maybeRepairSandboxImages(
     }
     return cfg;
   }
-  const containerEngine = backend === "podman" ? PODMAN_SANDBOX_ENGINE : DOCKER_SANDBOX_ENGINE;
 
   const engineAvailable = await isContainerEngineAvailable(containerEngine.command);
   if (!engineAvailable) {
@@ -330,7 +347,6 @@ export async function maybeRepairSandboxImages(
     return cfg;
   }
   await validateSandboxContainerEngineTarget(containerEngine);
-  await noteCodexBwrapNamespaceWarning(cfg, containerEngine.displayName, options);
 
   const dockerImage = sandbox.docker?.image?.trim() || DEFAULT_SANDBOX_IMAGE;
   await handleMissingSandboxImage(
