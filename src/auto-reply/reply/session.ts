@@ -146,7 +146,7 @@ import {
   prepareReplySessionParentFork,
 } from "./session-parent-fork-prepare.js";
 import {
-  clearSessionResetRuntimeState,
+  clearCommittedSessionResetRuntimeState,
   createSessionResetCleanupGuard,
   stopSessionResetSubagents,
 } from "./session-reset-cleanup.js";
@@ -1115,18 +1115,14 @@ async function initSessionStateAttemptLocked(
     // outside the store writer lane instead of surfacing this to the caller.
     throw new ReplySessionInitConflictError(sessionKey);
   }
-  if (previousSessionEntry) {
-    try {
-      clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
-        activeReplySessionId: previousSessionEntry.sessionId,
-        agentId,
-      });
-    } catch (error) {
-      // The replacement is already durable. Runtime cleanup is best-effort and
-      // must not turn a committed reset into a reported initialization failure.
-      log.warn(`failed to clear reset runtime state for session ${sessionKey}: ${String(error)}`);
-    }
-  }
+  clearCommittedSessionResetRuntimeState({
+    previousSessionEntry,
+    agentId,
+    sessionKey,
+    signal: params.signal,
+    onError: (error) =>
+      log.warn(`failed to clear reset runtime state for session ${sessionKey}: ${String(error)}`),
+  });
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
   // Admission may commit the first row before dispatch. Preserve its Goal and generation
