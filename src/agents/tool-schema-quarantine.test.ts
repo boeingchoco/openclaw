@@ -125,7 +125,7 @@ describe("runtime tool schema quarantine logging", () => {
   });
 
   it.each(["before dispatch", "after reply"] as const)(
-    "preserves a new same-key failure when recovery waits %s",
+    "clears an independent recovered key while preserving a renewed failure %s",
     async (phase) => {
       await withStateDirEnv("openclaw-tool-quarantine-overlap-", async () => {
         const quarantine = {
@@ -134,6 +134,8 @@ describe("runtime tool schema quarantine logging", () => {
           failedAt: new Date(123),
         };
         await recordPersistedRuntimeToolSchemaQuarantine(quarantine);
+        const healthyQuarantine = { ...quarantine, toolName: "healthy_tool" };
+        await recordPersistedRuntimeToolSchemaQuarantine(healthyQuarantine);
         const reached = createDeferredCore();
         const release = createDeferredCore();
         const clear = pluginStateWorker.clearRuntimeHealthInWorker;
@@ -154,7 +156,7 @@ describe("runtime tool schema quarantine logging", () => {
               await clear(params);
             }
           });
-        const healthy = () => [{ toolName: quarantine.toolName }];
+        const healthy = () => [quarantine, healthyQuarantine];
         const recovering = clearRecoveredPersistedRuntimeToolSchemaQuarantines(healthy);
         try {
           await reached.promise;
