@@ -39,7 +39,7 @@ it("loads legacy overrides with canonical precedence and replaces them on reload
     "extra.z",
     "toString",
   ]);
-  expect(manager.getUserBindings().toString).toBe("ctrl+b");
+  expect(manager.getUserBindings()).toMatchObject({ toString: "ctrl+b" });
 
   await writeFile(configPath, JSON.stringify({ followUp: "ctrl+g" }));
   manager.reload();
