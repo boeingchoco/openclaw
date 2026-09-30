@@ -34,7 +34,7 @@ commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
 Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
-Deleting, resetting, or archiving a session cancels only that agent's work for
+Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.
 

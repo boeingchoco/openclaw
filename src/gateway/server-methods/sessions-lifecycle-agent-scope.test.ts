@@ -62,9 +62,9 @@ it.each([
   });
   operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
   const queueKeys = [key, target.canonicalKey, targetId];
-  const followup = (agentId: string, sessionId: string, sessionKey: string) => {
-    const run = createQueueTestRun({ prompt: agentId });
-    Object.assign(run.run, { agentId, sessionId, sessionKey });
+  const followup = (ownerAgentId: string, sessionId: string, sessionKey: string) => {
+    const run = createQueueTestRun({ prompt: ownerAgentId });
+    Object.assign(run.run, { agentId: ownerAgentId, sessionId, sessionKey });
     const settled = vi.fn();
     run.turnAdoptionLifecycle = {
       admission: "cancel-only",
@@ -136,9 +136,13 @@ it.each([
       }),
     ).toBe(false);
     const entry = loadSessionEntry({ agentId, sessionKey: target.canonicalKey });
-    if (method === "sessions.delete") expect(entry).toBeUndefined();
-    else if (method === "sessions.reset") expect(entry?.lifecycleRevision).not.toBe("original");
-    else expect(entry?.archivedAt).toEqual(expect.any(Number));
+    if (method === "sessions.delete") {
+      expect(entry).toBeUndefined();
+    } else if (method === "sessions.reset") {
+      expect(entry?.lifecycleRevision).not.toBe("original");
+    } else {
+      expect(entry?.archivedAt).toEqual(expect.any(Number));
+    }
     release.resolve();
     await blocker;
     expect(await queuedResult).toEqual([{ status: "fulfilled", value: "preserved" }]);

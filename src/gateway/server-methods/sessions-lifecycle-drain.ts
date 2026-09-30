@@ -17,13 +17,11 @@ import {
   type SessionLifecycleQueueTarget,
 } from "../../auto-reply/reply/queue/cleanup.js";
 import {
-  replyRunRegistry,
-  resolveActiveReplyOperationForSessionId,
+  isReplyOperationForSession,
+  resolveReplyOperationsForSession,
   waitForReplyOperationOwnerSettlement,
-  type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { withTimeout } from "../../infra/fs-safe.js";
-import { agentSessionKeysMatchByRequestKey } from "../../routing/session-key.js";
 import {
   closeSessionWorkAdmissions,
   startSessionWorkAdmissionInterruption,
@@ -33,7 +31,6 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { waitForChatAbortControllerRemoval } from "../chat-abort-lifecycle-internal.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
-import { chatRunBelongsToAgent } from "../chat-run-owner.js";
 import type { AgentTerminalSessionDrain } from "../terminal/session-manager.types.js";
 import {
   reserveWorkerInferenceSessionDrain,
@@ -83,35 +80,6 @@ export class SessionLifecycleWorkspaceRecoveryError extends Error {
   }
 }
 
-function isSessionLifecycleReplyRun(
-  params: SessionLifecycleParams,
-  operation: ReplyOperation | undefined,
-): operation is ReplyOperation {
-  return (
-    operation !== undefined &&
-    (!params.sessionId || operation.sessionId === params.sessionId) &&
-    params.sessionKeys.some((key) => agentSessionKeysMatchByRequestKey(operation.key, key)) &&
-    chatRunBelongsToAgent(
-      {
-        agentId: operation.agentId,
-        sessionKey: operation.key,
-        defaultAgentId: params.defaultAgentId,
-      },
-      params.agentId,
-    )
-  );
-}
-
-function resolveSessionLifecycleReplyRuns(params: SessionLifecycleParams) {
-  const candidates = [
-    ...params.sessionKeys.map((key) => replyRunRegistry.get(key)),
-    ...(params.sessionId ? [resolveActiveReplyOperationForSessionId(params.sessionId)] : []),
-  ];
-  return [...new Set(candidates)].filter((operation) =>
-    isSessionLifecycleReplyRun(params, operation),
-  );
-}
-
 function hasAuthoritativeSessionWork(
   params: SessionLifecycleParams,
   workerDrain: WorkerInferenceSessionDrain | undefined,
@@ -121,7 +89,7 @@ function hasAuthoritativeSessionWork(
   const sessionId = params.sessionId;
   return (
     isCompetingSessionWorkAdmissionActive(params.storePath, params.lifecycleIdentities) ||
-    resolveSessionLifecycleReplyRuns(params).length > 0 ||
+    resolveReplyOperationsForSession(params).length > 0 ||
     Boolean(sessionId && isEmbeddedAgentRunInProgress(sessionId)) ||
     hasSessionLifecycleQueueWork(queueTarget) ||
     hasGatewaySessionAbortOwner({
@@ -227,7 +195,7 @@ export async function prepareSessionLifecycleDrain(
           void reclaimed.catch(() => {});
         }
         let controllerDrain = Promise.resolve(true);
-        const replyRuns = resolveSessionLifecycleReplyRuns(params);
+        const replyRuns = resolveReplyOperationsForSession(params);
         const cancellation = abortChatRunsForSessionKeyWithPartials({
           context: params.context,
           ops: createChatAbortOps(params.context),
@@ -255,7 +223,7 @@ export async function prepareSessionLifecycleDrain(
             let aborted = cleared.followupCleared > 0 || cleared.laneCleared > 0;
             for (const operation of replyRuns) {
               params.authorize?.();
-              if (isSessionLifecycleReplyRun(params, operation)) {
+              if (isReplyOperationForSession(params, operation)) {
                 aborted = operation.abortByUser() || aborted;
               }
             }

@@ -673,7 +673,9 @@ function selectQueuedCommandEntries(state: LaneState, matches: CommandLaneEntryF
   const entries: QueueEntry[] = [];
   for (const queue of [state.queue.foreground, state.queue.normal, state.queue.background]) {
     for (let entry = queue.head; entry; entry = entry.next) {
-      if (matches(entry.sessionTarget)) entries.push(entry);
+      if (matches(entry.sessionTarget)) {
+        entries.push(entry);
+      }
     }
   }
   return entries;
