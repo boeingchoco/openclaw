@@ -30,10 +30,12 @@ describe("validatePluginSchemaValue", () => {
   });
 
   it.each([
+    { ref: "#/$defs/entry", key: "entry" },
     { ref: "#%2F$defs%2Fentry", key: "entry" },
     { ref: "#/$defs%2Fentry", key: "entry" },
     { ref: "https://example.test/config#%2F$defs%2Fentry", key: "entry" },
     { ref: "#%2F$defs%2Fa%7E1b", key: "a/b" },
+    { ref: "#%2F$defs%2Fa%7E0b", key: "a~b" },
     { ref: "#%2F$defs%2Fpercent%252Fname", key: "percent%2Fname" },
   ])("validates and applies defaults through URI fragment $ref", ({ ref, key }) => {
     const value = {};
@@ -54,7 +56,35 @@ describe("validatePluginSchemaValue", () => {
     ).toMatchObject({ ok: false, schemaError: false });
   });
 
-  it.each(["#%2F$defs%2Fmissing", "#%2F$defs%2Fentry%zz", "#/$defs/entry%zz"])(
+  it("selects the nested default for encoded separators without replacing supplied values", () => {
+    const schema = {
+      type: "object",
+      $defs: {
+        "a/b": { type: "string", default: "literal" },
+        a: { b: { type: "string", default: "nested" } },
+      },
+      properties: { label: { $ref: "#/$defs/a%2Fb" } },
+      required: ["label"],
+    };
+    expect(
+      validatePluginSchemaValue({ origin: "global", schema, value: {}, applyDefaults: true }),
+    ).toEqual({ ok: true, value: { label: "nested" } });
+    expect(
+      validatePluginSchemaValue({
+        origin: "global",
+        schema,
+        value: { label: "literal" },
+        applyDefaults: true,
+      }),
+    ).toEqual({ ok: true, value: { label: "literal" } });
+  });
+
+  it.each([
+    "#%2F$defs%2Fmissing",
+    "#%2F$defs%2Fentry%zz",
+    "#/$defs/entry%zz",
+    "https://outside.example/schema#%2F$defs%2Fentry",
+  ])(
     "reports missing or malformed URI fragment %s as an unusable schema",
     ($ref) => {
       expect(
