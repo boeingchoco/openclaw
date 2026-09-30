@@ -261,23 +261,13 @@ export function buildInboundHistoryFromEntries(params: {
   if (params.limit <= 0) {
     return undefined;
   }
-  if (params.entries.length === 0) {
-    return [];
-  }
-  return params.entries.slice(-params.limit).map((entry) => {
-    const historyEntry: HistoryEntry = {
-      sender: entry.sender,
-      body: entry.body,
-      timestamp: entry.timestamp,
-    };
-    if (entry.messageId) {
-      historyEntry.messageId = entry.messageId;
-    }
-    if (entry.media && entry.media.length > 0) {
-      historyEntry.media = entry.media;
-    }
-    return historyEntry;
-  });
+  return params.entries.slice(-params.limit).map((entry) => ({
+    sender: entry.sender,
+    body: entry.body,
+    timestamp: entry.timestamp,
+    ...(entry.messageId ? { messageId: entry.messageId } : {}),
+    ...(entry.media?.length ? { media: entry.media } : {}),
+  }));
 }
 
 /**

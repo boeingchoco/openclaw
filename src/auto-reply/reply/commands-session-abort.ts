@@ -47,22 +47,6 @@ function resolveAbortTarget(params: {
   };
 }
 
-function resolveAbortCutoffForTarget(params: {
-  ctx: Parameters<CommandHandler>[0]["ctx"];
-  commandSessionKey?: string;
-  targetSessionKey?: string;
-}): AbortCutoff | undefined {
-  if (
-    !shouldPersistAbortCutoff({
-      commandSessionKey: params.commandSessionKey,
-      targetSessionKey: params.targetSessionKey,
-    })
-  ) {
-    return undefined;
-  }
-  return resolveAbortCutoffFromContext(params.ctx);
-}
-
 async function applyAbortTarget(params: {
   isCurrent?: () => boolean;
   clearQueues?: boolean;
@@ -117,11 +101,12 @@ function buildAbortTargetApplyParams(
     sessionStore: params.sessionStore,
     storePath: params.storePath,
     abortKey: params.command.abortKey,
-    abortCutoff: resolveAbortCutoffForTarget({
-      ctx: params.ctx,
+    abortCutoff: shouldPersistAbortCutoff({
       commandSessionKey: params.sessionKey,
       targetSessionKey: abortTarget.key,
-    }),
+    })
+      ? resolveAbortCutoffFromContext(params.ctx)
+      : undefined,
   };
 }
 
@@ -142,7 +127,6 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
           clearQueues: true,
         });
 
-        // Trigger internal hook for stop command
         const hookEvent = createInternalHookEvent(
           "command",
           "stop",

@@ -1675,7 +1675,6 @@ src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-utils.ts	1
 src/auto-reply/reply/block-streaming.ts	3
 src/auto-reply/reply/commands-acp/diagnostics.ts	2
-src/auto-reply/reply/commands-acp/shared.ts	1
 src/auto-reply/reply/commands-allowlist.ts	6
 src/auto-reply/reply/commands-config.ts	1
 src/auto-reply/reply/commands-context-report.ts	1

@@ -297,11 +297,7 @@ export function abortReplyRunBySessionId(sessionId: string): boolean {
   return operation.abortByUser();
 }
 
-export function resolveActiveReplyOperationForSessionId(
-  sessionId: string,
-): ReplyOperation | undefined {
-  return resolveReplyRunForCurrentSessionId(sessionId);
-}
+export { resolveReplyRunForCurrentSessionId as resolveActiveReplyOperationForSessionId };
 
 export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
@@ -515,36 +511,28 @@ function evictPriorLifecycleReplyRuns(): void {
     if (evict) {
       try {
         evict();
+        continue;
       } catch (error) {
         errors.push(error);
-        try {
-          clearReplyRunState({
-            sessionKey: operation.key,
-            sessionId: operation.sessionId,
-            operation,
-          });
-        } catch (clearError) {
-          errors.push(clearError);
+      }
+    } else {
+      // Pre-generation hot-loaded operations have no retained callback, but their
+      // public method still closes over the module instance that owns the backend.
+      try {
+        if (!operation.abortForRestart()) {
+          errors.push(new Error(`Stale reply operation was not abortable: ${operation.key}`));
         }
+      } catch (error) {
+        errors.push(error);
       }
-      continue;
-    }
-    // Pre-generation hot-loaded operations have no retained callback, but their
-    // public method still closes over the module instance that owns the backend.
-    try {
-      if (!operation.abortForRestart()) {
-        errors.push(new Error(`Stale reply operation was not abortable: ${operation.key}`));
+      // Admission stays occupied until the old closure clears it. If abort
+      // synchronously clears and replaces the slot, its captured stateCleared
+      // makes this completion idempotent instead of erasing the replacement.
+      try {
+        operation.complete();
+      } catch (error) {
+        errors.push(error);
       }
-    } catch (error) {
-      errors.push(error);
-    }
-    // Admission stays occupied until the old closure clears it. If abort
-    // synchronously clears and replaces the slot, its captured stateCleared
-    // makes this completion idempotent instead of erasing the replacement.
-    try {
-      operation.complete();
-    } catch (error) {
-      errors.push(error);
     }
     try {
       clearReplyRunState({

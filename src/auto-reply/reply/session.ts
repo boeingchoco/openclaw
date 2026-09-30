@@ -335,16 +335,12 @@ function resolveReplySessionRolloverState(
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
   prepareChannelParticipantObservation(params.ctx);
-  return await runWithSessionInitConflictRetry(
-    async () => await initSessionStateAttempt(params, false),
-    { signal: params.signal },
-  );
+  return await runWithSessionInitConflictRetry(async () => await initSessionStateAttempt(params), {
+    signal: params.signal,
+  });
 }
 
-async function initSessionStateAttempt(
-  params: InitSessionStateParams,
-  staleSnapshotRetried: boolean,
-): Promise<SessionInitResult> {
+async function initSessionStateAttempt(params: InitSessionStateParams): Promise<SessionInitResult> {
   const attemptContext = await resolveInitSessionStateAttemptContext(params, "initialization");
   params.signal?.throwIfAborted();
   const binding = attemptContext.conversationBinding;
@@ -416,7 +412,7 @@ async function initSessionStateAttempt(
       await initSessionStateAttemptLocked(
         params,
         { ...attemptContext, storeWriterIdentity },
-        staleSnapshotRetried,
+        false,
         undefined,
       ),
     { identities: storeWriterIdentity ? [storeWriterIdentity] : undefined },
