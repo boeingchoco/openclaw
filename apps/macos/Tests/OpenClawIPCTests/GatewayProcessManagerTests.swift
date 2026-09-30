@@ -326,6 +326,90 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func `pause clears migration failure and resumes through the retained Node install`() async throws {
+        try await self.withLaunchAgentEnvironment {
+            let manager = self.manager
+            let prefix = ["/fixture/tools/node/bin/node", "/fixture/lib/node_modules/openclaw/openclaw.mjs"]
+            manager.retainedNodeServiceCLI = .init(prefix: prefix, sqliteLibrary: nil)
+            defer { manager.retainedNodeServiceCLI = nil }
+            manager.nodeMigrationFailure = "The core version update is offline."
+            manager.setTestingDesiredActive(true)
+            manager.stop()
+            manager.setTestingDesiredActive(true)
+            #expect(manager.nodeMigrationFailure == nil)
+            #expect(await manager._testEnableLaunchAgentIfNeededInstalled(port: 29871))
+            let installs = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                .filter { $0.contains("install") }
+            #expect(installs.count == 1)
+            #expect(installs.first?.prefix(prefix.count) == prefix[...])
+        }
+    }
+
+    @Test func `hosting changes retain resume intent across failed service removal`() async throws {
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: #"{"ok":false,"message":"fixture uninstall failed"}"#)
+        {
+            let manager = self.manager
+            manager.hostingChangeInProgress = true
+            defer { manager.hostingChangeInProgress = false }
+            manager.setTestingDesiredActive(false)
+            manager.setActive(true)
+            #expect(manager.desiredActive)
+            #expect(manager.status != .starting)
+
+            manager.stop(preservingActivationIntent: true)
+            await manager.waitForStartupAttempt()
+            #expect(manager.desiredActive)
+            #expect(manager.lastFailureReason == "fixture uninstall failed")
+
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true}"#)
+            manager.stop(preservingActivationIntent: true)
+            await manager.waitForStartupAttempt()
+            #expect(manager.desiredActive)
+            #expect(manager.lastFailureReason == nil)
+            manager.setActive(false)
+            await manager.waitForStartupAttempt()
+            #expect(!manager.desiredActive)
+        }
+    }
+
+    @Test func `quit joins a pending service pause before completing`() async throws {
+        let uninstallStarted = AsyncTestGate()
+        let finishUninstall = AsyncTestGate()
+        let shutdownObserved = AsyncTestGate()
+        defer { finishUninstall.open() }
+        try await self.withLaunchAgentEnvironment(commandHook: { arguments in
+            if arguments.first == "uninstall" {
+                uninstallStarted.open()
+                await finishUninstall.wait()
+            }
+        }) {
+            let manager = self.manager
+            manager.setTestingDesiredActive(true)
+            manager.stop()
+            await uninstallStarted.wait()
+            #expect(manager.gatewayOperationShutdownTimeout >= GatewayLaunchAgentManager.startupMigrationTolerance)
+            var joinedPause = false
+            var finished = false
+            manager._testSetLaunchAgentDisableWaitHook {
+                joinedPause = true
+                shutdownObserved.open()
+            }
+            defer { manager._testSetLaunchAgentDisableWaitHook(nil) }
+            let shutdown = Task {
+                await manager.shutdownAppHostedGateway()
+                finished = true
+                shutdownObserved.open()
+            }
+            await shutdownObserved.wait()
+            #expect(joinedPause)
+            #expect(!finished)
+            finishUninstall.open()
+            await shutdown.value
+            #expect(finished)
+        }
+    }
+
     @Test func `queues a changed launch agent request behind an in-flight request`() async throws {
         let firstPort = 19091
         let secondPort = 19092
@@ -1319,6 +1403,86 @@ struct GatewayProcessManagerTests {
                 #expect(session.latestTask()?.snapshotSendCount() == (becomesReady ? 4 : 3))
                 #expect(manager.status == (becomesReady ? .running(details: "pid 4242") : .starting))
                 #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+                await connection.shutdown()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            }
+        }
+    }
+
+    @Test(arguments: [
+        ("UNAVAILABLE", "startup-sidecars", true, true),
+        ("UNAVAILABLE", "startup-sidecars", false, false),
+        ("UNAUTHORIZED", "auth-token-mismatch", true, false),
+        ("UNAVAILABLE", "other", true, false),
+    ])
+    func `startup handshake retries without repairing while auth rejections remain terminal`(
+        code: String,
+        reason: String,
+        retryable: Bool,
+        schedulesRetry: Bool) async throws
+    {
+        let stateDir = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+        try await self.withLaunchAgentEnvironment {
+            try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                let port = GatewayEnvironment.gatewayPort()
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port))
+                let url = try #require(URL(string: "ws://example.invalid"))
+                let clock = ManualTestClock()
+                let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url, clock: clock) {
+                    GatewayTestWebSocketTask(receiveHook: { task, index in
+                        if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                        let id = task.snapshotConnectRequestID() ?? "connect"
+                        return .data(Data("""
+                        {"type":"res","id":"\(id)","ok":false,"error":{
+                          "code":"\(code)","message":"fixture connect rejected","retryable":\(retryable),
+                          "details":{"reason":"\(reason)"}}}
+                        """.utf8))
+                    })
+                }
+                manager.setTestingDesiredActive(true)
+                manager.setTestingStatus(.starting)
+                manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
+                await PortGuardian.shared.setTestingDescriptor(self.gatewayDescriptor(pid: 4242), forPort: port)
+                defer {
+                    manager.setTestingDesiredActive(false)
+                    manager._testClearLaunchAgentReadinessFailure()
+                    manager._testSetLastObservedGatewayPID(nil)
+                }
+                let retryAt = clock.now.advanced(by: .milliseconds(300))
+                let observed = AsyncTestGate()
+                var retryScheduled = false
+                let retryObserver = Task {
+                    await clock.waitForSleep(until: retryAt)
+                    guard !Task.isCancelled else { return }
+                    retryScheduled = true
+                    observed.open()
+                }
+                let readiness = Task {
+                    let ready = await manager.waitForGatewayReady(timeout: 1)
+                    observed.open()
+                    return ready
+                }
+                await observed.wait()
+                #expect(retryScheduled == schedulesRetry)
+                if schedulesRetry {
+                    #expect(manager.status == .starting)
+                } else if case .failed = manager.status {
+                    // Authentication and unrelated refusals terminate the first probe.
+                } else {
+                    Issue.record("expected a terminal handshake rejection")
+                }
+                // End this lifecycle before a second connection can enter the transport's backoff.
+                manager.setTestingDesiredActive(false)
+                retryObserver.cancel()
+                clock.advance(by: .milliseconds(300))
+                #expect(await readiness.value == false)
+                await retryObserver.value
+                #expect(session.snapshotMakeCount() == 1)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .allSatisfy { $0.first != "install" })
 
                 await connection.shutdown()
                 await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)

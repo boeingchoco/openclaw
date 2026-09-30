@@ -86,4 +86,38 @@ struct PostUpdateBundledRuntimeTests {
             }
         }
     }
+
+    @Test func `completed migration preserves notification receipts and synthetic launches remain silent`() {
+        let receipt = PostAppUpdateReceipt(
+            fromVersion: "2026.8.1",
+            toVersion: "2026.9.1",
+            recordedAt: .distantPast,
+            notificationAttempts: 1)
+        for verified in [false, true] {
+            #expect(PostUpdateController.notificationContinuation(
+                receipt: receipt,
+                runtimeVerified: verified,
+                migrationOnlyLaunchCheck: false) == .notify)
+        }
+        for inFlight in [false, true] {
+            let pendingRuntime = PostAppUpdateReceipt(
+                fromVersion: "2026.8.1",
+                toVersion: "2026.9.1",
+                recordedAt: .distantPast,
+                gatewayUpdateIncomplete: true,
+                notificationInFlight: inFlight)
+            #expect(PostUpdateController.notificationContinuation(
+                receipt: pendingRuntime,
+                runtimeVerified: false,
+                migrationOnlyLaunchCheck: false) == .waitForRuntime)
+            #expect(PostUpdateController.notificationContinuation(
+                receipt: pendingRuntime,
+                runtimeVerified: true,
+                migrationOnlyLaunchCheck: false) == (inFlight ? .deliveryUnconfirmed : .notify))
+            #expect(PostUpdateController.notificationContinuation(
+                receipt: pendingRuntime,
+                runtimeVerified: true,
+                migrationOnlyLaunchCheck: true) == .completeSilently)
+        }
+    }
 }

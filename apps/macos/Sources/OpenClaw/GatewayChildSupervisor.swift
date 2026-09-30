@@ -27,19 +27,22 @@ final class GatewayChildSupervisor {
         }
 
         var childEnvironment: [String: String] {
-            // The app's launchd identity must never turn its child into a managed service.
-            // Keep aligned with src/infra/supervisor-markers.ts.
-            let markers: Set = [
-                "OPENCLAW_SUPERVISOR_MODE", "OPENCLAW_LAUNCHD_LABEL", "XPC_SERVICE_NAME",
-                "OPENCLAW_SYSTEMD_UNIT", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM",
-                "OPENCLAW_WINDOWS_TASK_NAME", "OPENCLAW_SERVICE_MARKER", "OPENCLAW_SERVICE_KIND",
-            ]
-            var environment = self.environment.filter {
-                !markers.contains($0.key) && !$0.key.hasPrefix("LAUNCH_JOB_")
-            }
+            var environment = GatewayChildSupervisor.environmentWithoutSupervisorMarkers(self.environment)
             environment["OPENCLAW_GATEWAY_HOST_LIFELINE"] = "stdin"
             return environment
         }
+    }
+
+    nonisolated static func environmentWithoutSupervisorMarkers(_ source: [String: String]) -> [String: String] {
+        // Neither a child Gateway nor an installer CLI inherits the app or old service's supervisor.
+        // Keep aligned with src/infra/supervisor-markers.ts.
+        let markers: Set = [
+            "OPENCLAW_SUPERVISOR_MODE", "OPENCLAW_LAUNCHD_LABEL", "XPC_SERVICE_NAME",
+            "OPENCLAW_SYSTEMD_UNIT", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM",
+            "OPENCLAW_WINDOWS_TASK_NAME", "OPENCLAW_SERVICE_MARKER", "OPENCLAW_SERVICE_KIND",
+            "OPENCLAW_GATEWAY_HOST_LIFELINE",
+        ]
+        return source.filter { !markers.contains($0.key) && !$0.key.hasPrefix("LAUNCH_JOB_") }
     }
 
     struct Child: Sendable {

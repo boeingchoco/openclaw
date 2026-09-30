@@ -264,6 +264,13 @@ struct PostUpdateSession: Decodable {
     let parentSessionKey: String?
 }
 
+enum PostUpdateNotificationContinuation: Equatable {
+    case waitForRuntime
+    case notify
+    case deliveryUnconfirmed
+    case completeSilently
+}
+
 enum PostUpdateNotificationOutcome: Equatable {
     case delivered
     case noEligibleSession
@@ -287,16 +294,24 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
     private var receipt: PostAppUpdateReceipt?
     private var window: NSWindow?
     private var task: Task<Void, Never>?
+    private var retryNodeMigration = false
+    private var migrationOnlyLaunchCheck = false
 
     @discardableResult
     func startIfNeeded(profile: AppProfile = .current) -> Bool {
         guard !profile.isActive || BundledRuntime.isBundledApp else { return false }
-        guard let receipt = PostAppUpdateReceiptStore.pendingForLaunch(
+        let pending = PostAppUpdateReceiptStore.pendingForLaunch(
             currentVersion: GatewayEnvironment.appVersionString(),
             currentRuntimeBuildID: Bundle.main.infoDictionary?["OpenClawRuntimeBuildID"] as? String,
             onboardingSeen: AppStateStore.shared.onboardingSeen,
             allowsUpdateWorkflow: BundledRuntime.isBundledApp || !CLIInstallBuild.isDebug)
-        else { return false }
+        // A legacy Node migration can fail on the first launch of a same-version rebuild,
+        // even when there is no ordinary app update receipt left to replay.
+        let migrationCheck = BundledRuntime.isBundledApp && !profile.isActive && AppStateStore.shared.onboardingSeen
+        guard let receipt = pending ?? (migrationCheck ? GatewayEnvironment.appVersionString().map {
+            PostAppUpdateReceipt(fromVersion: $0, toVersion: $0, recordedAt: Date())
+        } : nil) else { return false }
+        self.migrationOnlyLaunchCheck = pending == nil
         self.receipt = receipt
         self.run()
         return true
@@ -304,6 +319,9 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
 
     func retry() {
         guard self.receipt != nil, !self.model.isWorking else { return }
+        self.retryNodeMigration = GatewayProcessManager.shared.nodeMigrationFailure != nil ||
+            GatewayProcessManager.shared.nodeMigrationVersionUpdated ||
+            GatewayProcessManager.shared.retainedNodeServiceCLI != nil
         self.run()
     }
 
@@ -365,6 +383,79 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func finishNodeMigrationIfNeeded(
+        receipt: PostAppUpdateReceipt,
+        connectionMode: AppState.ConnectionMode) async -> Bool
+    {
+        guard BundledRuntime.isBundledApp else { return false }
+        await GatewayProcessManager.shared.waitForStartupAttempt()
+        if self.retryNodeMigration {
+            self.retryNodeMigration = false
+            self.model.phase = .updating
+            self.model.message = String(localized: "Switching the Gateway to the bundled runtime…")
+            self.show()
+            do { try await GatewayProcessManager.shared.retryManagedNodeMigration() } catch {
+                self.setGatewayUpdateIncomplete(true, receipt: receipt)
+                self.fail(
+                    message: String(localized: "The Gateway runtime migration could not finish."),
+                    details: error.localizedDescription)
+                return true
+            }
+        }
+        if let failure = GatewayProcessManager.shared.nodeMigrationFailure {
+            self.setGatewayUpdateIncomplete(true, receipt: receipt)
+            self.show()
+            self.fail(
+                message: String(localized: "The Gateway runtime migration could not finish."),
+                details: failure)
+            return true
+        }
+        if GatewayProcessManager.shared.nodeMigrationVersionUpdated {
+            self.setGatewayUpdateIncomplete(true, receipt: receipt)
+            self.show()
+            self.fail(
+                message: String(localized: "The Gateway version is updated and still running on Node."),
+                details: String(
+                    localized: """
+                    Choose Retry or relaunch OpenClaw to switch this same-version Gateway to the bundled runtime.
+                    """))
+            return true
+        }
+        if GatewayProcessManager.shared.nodeMigrationCompleted {
+            return await self.finishNotificationIfReady(
+                receipt: receipt, connectionMode: connectionMode, runtimeVerified: true)
+        }
+        return false
+    }
+
+    private func finishNotificationIfReady(
+        receipt: PostAppUpdateReceipt,
+        connectionMode: AppState.ConnectionMode,
+        runtimeVerified: Bool = false) async -> Bool
+    {
+        let continuation = Self.notificationContinuation(
+            receipt: receipt,
+            runtimeVerified: runtimeVerified,
+            migrationOnlyLaunchCheck: self.migrationOnlyLaunchCheck)
+        guard continuation != .waitForRuntime else { return false }
+        if runtimeVerified { self.setGatewayUpdateIncomplete(false, receipt: receipt) }
+        switch continuation {
+        case .waitForRuntime:
+            return false
+        case .notify:
+            await self.finishNotification(receipt: receipt, connectionMode: connectionMode)
+        case .deliveryUnconfirmed:
+            self.finishNotification(outcome: .deliveryUnconfirmed, receipt: receipt, connectionMode: connectionMode)
+        case .completeSilently:
+            self.model.phase = .complete
+            self.model.message = String(localized: "The Gateway is ready on the bundled runtime.")
+            self.model.details = nil
+            PostAppUpdateReceiptStore.clear()
+            self.receipt = nil
+        }
+        return true
+    }
+
     private func finishUpdate(receipt: PostAppUpdateReceipt) async {
         guard !AppProfile.current.isActive || BundledRuntime.isBundledApp else {
             self.finishSilently()
@@ -376,17 +467,12 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             return
         }
 
-        // Resume a definitely uncommitted notification before the Gateway action
-        // gate; a ready runtime must not discard it as an app-only receipt.
-        if Self.isNotificationOnlyRetry(receipt) {
-            await self.finishNotification(receipt: receipt, connectionMode: connectionMode)
-            return
-        }
-        if receipt.notificationInFlight && !receipt.gatewayUpdateIncomplete {
-            self.finishNotification(
-                outcome: .deliveryUnconfirmed,
-                receipt: receipt,
-                connectionMode: connectionMode)
+        // Pending notification work precedes migration status, including same-version startup migrations.
+        if await self.finishNotificationIfReady(receipt: receipt, connectionMode: connectionMode) { return }
+        if await self.finishNodeMigrationIfNeeded(receipt: receipt, connectionMode: connectionMode) { return }
+
+        if self.migrationOnlyLaunchCheck {
+            self.finishSilently()
             return
         }
 
@@ -735,6 +821,18 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         return !CLIInstallPrompter.isManagedUpgrade(
             found: gatewayVersion,
             required: appVersion)
+    }
+
+    static func notificationContinuation(
+        receipt: PostAppUpdateReceipt,
+        runtimeVerified: Bool,
+        migrationOnlyLaunchCheck: Bool) -> PostUpdateNotificationContinuation
+    {
+        if self.isNotificationOnlyRetry(receipt) { return .notify }
+        if receipt.notificationInFlight && !receipt.gatewayUpdateIncomplete { return .deliveryUnconfirmed }
+        guard runtimeVerified else { return .waitForRuntime }
+        guard !migrationOnlyLaunchCheck else { return .completeSilently }
+        return receipt.notificationInFlight ? .deliveryUnconfirmed : .notify
     }
 
     static func isNotificationOnlyRetry(_ receipt: PostAppUpdateReceipt) -> Bool {

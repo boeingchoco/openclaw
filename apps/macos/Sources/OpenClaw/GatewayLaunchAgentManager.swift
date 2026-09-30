@@ -10,6 +10,7 @@ enum GatewayLaunchAgentManager {
     struct InstalledServiceCLI: Sendable {
         let prefix: [String]
         let sqliteLibrary: String?
+        var environment: [String: String] = [:]
     }
 
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
@@ -187,7 +188,8 @@ enum GatewayLaunchAgentManager {
     static func set(
         enabled: Bool,
         port: Int,
-        allowUnconfigured: Bool = false) async -> String?
+        allowUnconfigured: Bool = false,
+        whenMissingCLI: InstalledServiceCLI? = nil) async -> String?
     {
         if enabled, CommandResolver.connectionModeIsRemote(), !allowUnconfigured {
             self.logger.info("launchd change skipped (remote mode)")
@@ -221,11 +223,14 @@ enum GatewayLaunchAgentManager {
                 }
                 installedCLI = cli
             } else {
-                installedCLI = nil
+                // Pause removes the plist. An interrupted legacy migration still resumes
+                // through its captured Node install rather than bypassing the core updater.
+                installedCLI = existed ? nil : whenMissingCLI
             }
             let runtime: BundledRuntime?
             do {
-                runtime = BundledRuntime.isBundledApp && !existed ? try await BundledRuntime.seed() : nil
+                runtime = BundledRuntime.isBundledApp && !existed && installedCLI == nil
+                    ? try await BundledRuntime.seed() : nil
             } catch {
                 return error.localizedDescription
             }
@@ -381,7 +386,10 @@ enum GatewayLaunchAgentManager {
             (url.deletingLastPathComponent().lastPathComponent == "dist" &&
                 ["index.js", "index.mjs", "entry.js", "entry.mjs"].contains(url.lastPathComponent))
         else { return nil }
-        return InstalledServiceCLI(prefix: prefix, sqliteLibrary: snapshot.environment["OPENCLAW_SQLITE_LIBRARY"])
+        return InstalledServiceCLI(
+            prefix: prefix,
+            sqliteLibrary: snapshot.environment["OPENCLAW_SQLITE_LIBRARY"],
+            environment: snapshot.environment)
     }
 
     static func kickstart() async -> String? {
@@ -610,7 +618,7 @@ extension GatewayLaunchAgentManager {
         profile: AppProfile,
         searchPaths: [String]) -> [String: String]
     {
-        var result = environment
+        var result = environment.merging(installedCLI?.environment ?? [:]) { _, installed in installed }
         var paths = searchPaths
         if let runtime {
             paths.insert(runtime.bun.deletingLastPathComponent().path, at: 0)
@@ -629,8 +637,7 @@ extension GatewayLaunchAgentManager {
             result["OPENCLAW_STATE_DIR"] = directory.path
             result["OPENCLAW_CONFIG_PATH"] = directory.appendingPathComponent("openclaw.json").path
         }
-        result.removeValue(forKey: "OPENCLAW_GATEWAY_HOST_LIFELINE")
-        return result
+        return GatewayChildSupervisor.environmentWithoutSupervisorMarkers(result)
     }
 
     private static func withJsonFlag(_ args: [String]) -> [String] {

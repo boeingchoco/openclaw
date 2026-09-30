@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-struct LaunchAgentPlistSnapshot: Equatable {
+struct LaunchAgentPlistSnapshot: Equatable, Sendable {
     let programArguments: [String]
     let environment: [String: String]
     let stdoutPath: String?

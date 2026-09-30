@@ -67,6 +67,8 @@ enum ManagedCLIUpdateOutcome: Equatable {
 
 @MainActor
 enum CLIInstaller {
+    static let managedUpdateTimeout: TimeInterval = 7200
+
     enum Channel: String, CaseIterable, Equatable {
         case stable
         case beta
@@ -547,6 +549,7 @@ enum CLIInstaller {
         targetVersion: String,
         restartGateway: Bool = true,
         repair: Bool = false,
+        installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async
         -> ManagedCLIUpdateOutcome
     {
@@ -554,19 +557,27 @@ enum CLIInstaller {
         await statusHandler(repair
             ? String(localized: "Repairing the OpenClaw Gateway update…")
             : String(format: String(localized: "Updating the OpenClaw Gateway to %@…"), targetVersion))
-        let command = self.managedUpdateCommand(
+        var command = self.managedUpdateCommand(
             executable: executable,
             targetVersion: targetVersion,
             restartGateway: restartGateway,
             repair: repair)
-        let environment = self.probeEnvironment(location: executable)
+        if let installedCLI { command = installedCLI.prefix + command.dropFirst() }
+        let environment = installedCLI.map {
+            GatewayLaunchAgentManager.daemonEnvironment(
+                runtime: nil,
+                installedCLI: $0,
+                environment: ProcessInfo.processInfo.environment,
+                profile: .current,
+                searchPaths: CommandResolver.preferredPaths())
+        } ?? self.probeEnvironment(location: executable)
         let response = await ShellExecutor.runDetailed(
             command: command,
             cwd: nil,
             env: environment,
             // The CLI timeout is per step. Keep the aggregate watchdog above
             // the full package, plugin, doctor, and restart sequence.
-            timeout: 7200)
+            timeout: self.managedUpdateTimeout)
         let summary = self.parseManagedUpdateSummary(response.stdout)
 
         let reportedStatus = summary?.status
@@ -589,7 +600,20 @@ enum CLIInstaller {
             return .failure(message: message, details: details.map(self.limitDiagnostic))
         }
 
-        let managedStatus = await self.managedStatus(expectedVersion: targetVersion)
+        // The legacy updater must verify the Node install it just updated, even in a bundled app.
+        let managedStatus: Status
+        if let installedCLI {
+            let probe = await ShellExecutor.runDetailed(
+                command: installedCLI.prefix + ["--version"], cwd: nil, env: environment, timeout: 15)
+            managedStatus = probe.success
+                ? self.classifyVersion(location: executable, output: probe.stdout, expectedVersion: targetVersion)
+                : .unusable(location: executable)
+        } else {
+            managedStatus = await self.status(
+                location: executable,
+                expectedVersion: targetVersion,
+                preferredPaths: CommandResolver.preferredPathsAsync())
+        }
         guard case let .ready(_, installedVersion) = managedStatus else {
             let message = String(localized: "Gateway update finished, but verification failed.")
             await statusHandler(message)
