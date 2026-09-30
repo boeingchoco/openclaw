@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
     >(),
   prepareMutableUpdate: vi.fn<Parameters<typeof executeMutableUpdate>[0]["prepareMutableUpdate"]>(),
   pluginPreflight: vi.fn(),
+  preflightLocalTui: vi.fn(),
   pluginTargets: vi.fn(),
   pluginRecords: vi.fn(),
   npmMetadata: vi.fn(),
@@ -59,6 +60,7 @@ vi.mock("../../infra/update-global.js", async (importOriginal) => ({
 vi.mock("../../infra/local-tui-processes.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/local-tui-processes.js")>()),
   announceLocalTuiUpdate: mocks.announceLocalTui,
+  preflightLocalTuiProcessesBeforeUpdate: mocks.preflightLocalTui,
   quiesceLocalTuiProcessesBeforeUpdate: mocks.quiesceLocalTui,
 }));
 vi.mock("../../infra/update-candidate-canary.js", () => ({
@@ -242,6 +244,7 @@ beforeEach(() => {
   mocks.maybeStopService.mockImplementation(async ({ phase }) => inspectOrStopService(phase));
   mocks.prepareMutableUpdate.mockResolvedValue(undefined);
   mocks.pluginPreflight.mockResolvedValue([]);
+  mocks.preflightLocalTui.mockImplementation(() => {});
   mocks.announceLocalTui.mockResolvedValue({ pid: 99, release: vi.fn() });
   mocks.quiesceLocalTui.mockResolvedValue({
     lockPath: "/tmp/openclaw-local-tui-update.lock",
