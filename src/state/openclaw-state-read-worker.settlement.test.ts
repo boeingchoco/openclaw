@@ -1,6 +1,6 @@
 // Register shared pool mocks before modules that consume them.
 // oxfmt-ignore
-import { emptyReply, mock, queueTask, tempDirs } from "./openclaw-state-read-worker.test-harness.js";
+import { emptyReply, mock, queueTask, source, tempDirs } from "./openclaw-state-read-worker.test-harness.js";
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { expect, it, vi } from "vitest";
@@ -351,4 +351,53 @@ it("services two accepted recovery reads through release from their follower's c
     await Promise.allSettled([follower]);
     capture.mockRestore();
   }
+});
+
+it.each([false, true])(
+  "closes only the selected reader when native close is proven (capable=%s)",
+  async (capable) => {
+    mock.capabilities.mockReturnValue({
+      explicitSqliteCloseReleasesNativeResources: capable,
+      decided: true,
+      reason: "test policy",
+    });
+    const { pathname, options } = source();
+    const task = queueTask();
+    task.result.resolve(emptyReply);
+    await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    expect(mock.closeResources).toHaveBeenCalledTimes(capable ? 1 : 0);
+    expect(mock.rotate).toHaveBeenCalledTimes(capable ? 0 : 1);
+    expect(mock.closePool).not.toHaveBeenCalled();
+  },
+);
+
+it("uses completed admission for later resource closes through the same pool owner", async () => {
+  const { pathname, options } = source();
+  mock.capabilities.mockReturnValue({
+    explicitSqliteCloseReleasesNativeResources: false,
+    decided: false,
+    reason: "admission pending",
+  });
+  const early = queueTask();
+  early.result.resolve(emptyReply);
+  await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+  await closeOpenClawStateDatabaseByPathAsync(pathname);
+  expect(mock.rotate).toHaveBeenCalledOnce();
+  expect(mock.closeResources).not.toHaveBeenCalled();
+
+  mock.capabilities.mockReturnValue({
+    explicitSqliteCloseReleasesNativeResources: true,
+    decided: true,
+    reason: "native close confirmed",
+  });
+  const admitted = queueTask();
+  admitted.result.resolve(emptyReply);
+  await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+  const request = await admitted.captured;
+  await closeOpenClawStateDatabaseByPathAsync(pathname);
+  expect(mock.closeResources).toHaveBeenCalledExactlyOnceWith(request.expectedIdentity);
+  expect(mock.rotate).toHaveBeenCalledOnce();
+  expect(mock.create).toHaveBeenCalledOnce();
+  expect(mock.closePool).not.toHaveBeenCalled();
 });

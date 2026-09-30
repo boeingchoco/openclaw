@@ -1,4 +1,10 @@
-import type { MessagePort, Worker, WorkerOptions, Transferable } from "node:worker_threads";
+import type {
+  MessagePort,
+  Worker,
+  WorkerOptions,
+  Transferable,
+  setEnvironmentData,
+} from "node:worker_threads";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import type {
   BrokerResourceAttachment,
@@ -106,6 +112,7 @@ export type NativeWorkerRequest =
       type: "create";
       id: number;
       filename: { kind: "url" | "path"; value: string };
+      environmentData: ReadonlyArray<readonly [string, Parameters<typeof setEnvironmentData>[1]]>;
       options: NativeWorkerOptions;
       transferList: Transferable[];
       resource?: NativeWorkerResourceRequest;
