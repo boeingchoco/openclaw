@@ -5,10 +5,12 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { consumeResponseBytes } from "@openclaw/normalization-core";
 import {
   buildConnector,
   fetch as undiciFetch,
   getGlobalDispatcher,
+  Headers as UndiciHeaders,
   Pool,
   Response as UndiciResponse,
   setGlobalDispatcher,
@@ -45,7 +47,23 @@ const TARGET_URL = `https://${TARGET_HOST}/media`;
 const PAYLOAD_BYTES = Buffer.byteLength(PAYLOAD);
 
 async function readProxyPayload(response: Response | UndiciResponse): Promise<string> {
-  return Buffer.from(await response.arrayBuffer()).toString("utf8");
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Proxy fixture response has no body");
+  }
+  const chunks: Uint8Array[] = [];
+  try {
+    const result = await consumeResponseBytes({
+      maxBytes: PAYLOAD_BYTES,
+      read: () => reader.read(),
+      onChunk: (chunk) => chunks.push(chunk),
+      onLimit: () => void reader.cancel().catch(() => undefined),
+    });
+    expect(result.truncated).toBe(false);
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function fetchPayload(dispatcher: ReturnType<typeof createHttp1ProxyAgent>) {
@@ -327,7 +345,7 @@ describe("SOCKS proxy protocol boundaries", () => {
     15_000,
   );
 
-  it.each(["flat array", "inherited object"])(
+  it.each(["object", "flat array", "Headers", "inherited object"])(
     "rejects per-request proxy credentials from %s before any SOCKS dispatch",
     async (form) => {
       await withProxyFixture(async ({ socksProxy, connections, originRoutes }) => {
@@ -338,13 +356,27 @@ describe("SOCKS proxy protocol boundaries", () => {
         const inherited = {};
         Object.setPrototypeOf(inherited, auth);
         try {
-          const request = dispatcher.request({
-            origin: `http://${TARGET_HOST}`,
-            path: "/media",
-            method: "GET",
-            headers: form === "flat array" ? Object.entries(auth).flat() : inherited,
-          });
-          await expect(request).rejects.toMatchObject({ code: "UND_ERR_INVALID_ARG" });
+          const request =
+            form === "Headers"
+              ? undiciFetch(`http://${TARGET_HOST}/media`, {
+                  dispatcher,
+                  headers: new UndiciHeaders(auth),
+                })
+              : dispatcher.request({
+                  origin: `http://${TARGET_HOST}`,
+                  path: "/media",
+                  method: "GET",
+                  headers:
+                    form === "flat array"
+                      ? Object.entries(auth).flat()
+                      : form === "inherited object"
+                        ? inherited
+                        : auth,
+                });
+          const error = { code: "UND_ERR_INVALID_ARG" };
+          await expect(request).rejects.toMatchObject(
+            form === "Headers" ? { cause: error } : error,
+          );
           expect(connections).toEqual([]);
           expect(originRoutes).toEqual([]);
           const response = await dispatcher.request({

@@ -221,20 +221,23 @@ describe("guarded fetch policy", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it.each(["64:ff9b::a9fe:a9fe", "64:ff9b:1:808:808:808:a9fe:a9fe", "100.100.100.200", "::"])(
-    "does not promote exact-origin trust into access to %s",
-    async (address) => {
-      const fetchImpl = fetchStub();
-      await expect(
-        guardedRequest(fetchImpl, {
-          url: "http://model.lan:11434/v1/models",
-          lookupFn: lookup(address),
-          policy: { allowedOrigins: ["http://model.lan:11434"] },
-        }),
-      ).rejects.toThrow(/private|internal|blocked/i);
-      expect(fetchImpl).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "169.254.169.254",
+    "64:ff9b::a9fe:a9fe",
+    "64:ff9b:1:808:808:808:a9fe:a9fe",
+    "100.100.100.200",
+    "::",
+  ])("does not promote exact-origin trust into access to %s", async (address) => {
+    const fetchImpl = fetchStub();
+    await expect(
+      guardedRequest(fetchImpl, {
+        url: "http://model.lan:11434/v1/models",
+        lookupFn: lookup(address),
+        policy: { allowedOrigins: ["http://model.lan:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 
   it("allows a configured IPv6 unique-local exact origin", async () => {
     const fetchImpl = fetchStub();
@@ -899,6 +902,29 @@ describe("request lifecycle", () => {
       }),
     );
     await result.release();
+  });
+
+  it("propagates a final dispatch rejection without sending the request", async () => {
+    const rejection = new Error("request owner closed");
+    const fetchImpl = fetchStub();
+    await expect(
+      guardedRequest(fetchImpl, {
+        beforeRequest: () => {
+          throw rejection;
+        },
+      }),
+    ).rejects.toBe(rejection);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects an asynchronous final dispatch callback before sending the request", async () => {
+    const fetchImpl = fetchStub();
+    await expect(
+      guardedRequest(fetchImpl, {
+        beforeRequest: (() => Promise.resolve()) as never,
+      }),
+    ).rejects.toThrow("beforeRequest must be synchronous");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it.each(["caller", "deadline"])(

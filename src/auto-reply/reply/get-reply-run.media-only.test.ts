@@ -1,6 +1,7 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
@@ -583,6 +584,34 @@ describe("runPreparedReply media-only handling", () => {
       envMockState.fastTestRuntime = true;
     }
     expect(requireRunReplyAgentCall().followupRun.run.workspaceDir).toBe("/tmp/session-worktree");
+  });
+
+  it.each([
+    { name: "initial", storedCwd: undefined, expected: "/tmp/session-repo" },
+    { name: "replaced", storedCwd: "/tmp/current-repo", expected: "/tmp/current-repo" },
+    { name: "cleared", storedCwd: null, expected: "/tmp/agent-repo" },
+  ])("uses the $name admitted session cwd for execution", async ({ storedCwd, expected }) => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      spawnedCwd: "/tmp/session-repo",
+      spawnedBy: "agent:default:main",
+    };
+    await runPrepared({
+      cfg: {
+        agents: {
+          defaults: { cwd: "/tmp/default-repo" },
+          entries: { default: { cwd: "/tmp/agent-repo" } },
+        },
+      },
+      sessionEntry,
+      sessionStore:
+        storedCwd !== undefined
+          ? { "session-key": { ...sessionEntry, spawnedCwd: storedCwd ?? undefined } }
+          : undefined,
+    });
+
+    expect(requireRunReplyAgentCall().followupRun.run.cwd).toBe(expected);
   });
 
   beforeEach(async () => {
@@ -1732,6 +1761,43 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.shouldFollowup).toBe(true);
     expect(call.isActive).toBe(true);
     expect(call.followupRun.originatingThreadId).toBe("501.000");
+  });
+
+  it("waits for ownership acquired during async auth preparation before dispatching", async () => {
+    const { resolveSessionAuthSelection } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const authEntered = createDeferred();
+    const releaseAuth = createDeferred();
+    vi.mocked(resolveSessionAuthSelection).mockImplementationOnce(async () => {
+      authEntered.resolve();
+      await releaseAuth.promise;
+      return undefined;
+    });
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    const running = runPrepared({ isNewSession: false, sessionId: "session-auth-race" });
+    let intruder: ReturnType<typeof createReplyOperation> | undefined;
+    try {
+      await authEntered.promise;
+      intruder = createReplyOperation({
+        sessionId: "session-auth-race",
+        sessionKey: "session-key",
+        resetTriggered: false,
+      });
+      intruder.setPhase("running");
+      releaseAuth.resolve();
+
+      await vi.waitFor(() => expect(intruder?.abortSignal.aborted).toBe(true));
+      expect(runReplyAgent).not.toHaveBeenCalled();
+      intruder.complete();
+
+      await expect(running).resolves.toEqual({ text: "ok" });
+      expect(runReplyAgent).toHaveBeenCalledOnce();
+    } finally {
+      releaseAuth.resolve();
+      intruder?.complete();
+      await running.catch(() => undefined);
+    }
   });
 
   it("rebinds a provisional pre-dispatch operation to a discovered existing session", async () => {

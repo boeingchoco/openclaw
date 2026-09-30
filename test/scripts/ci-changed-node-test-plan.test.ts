@@ -136,7 +136,7 @@ it.each([
   execFileSync("git", ["add", "."], { cwd });
   expect(
     hasImportGraphImpactOnTargets([target], (file) => file !== target, cwd, { tooling: true }),
-  ).toBe(Boolean(consumer && !/\/(?:\.cache|\.artifacts|dist|node_modules)\//u.test(consumer)));
+  ).toBe(!/\/(?:\.cache|\.artifacts|dist|node_modules)\//u.test(consumer));
   expect(hasUiE2eAffectingChange([target], { cwd })).toBe(expected);
 });
 

@@ -673,7 +673,7 @@ describe("launchd bootstrap repair", () => {
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
-  it.each(["exit", "timeout"] as const)(
+  it.each(["exit", "timeout", "signal"] as const)(
     "accepts already-loaded bootstrap output only after a completed command (%s)",
     async (termination) => {
       state.bootstrapError =
@@ -1667,7 +1667,7 @@ describe("launchd install", () => {
     expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
   });
 
-  it.each(["exit", "timeout"] as const)(
+  it.each(["exit", "timeout", "signal"] as const)(
     "retries teardown bootstrap output only after a completed command (%s)",
     async (termination) => {
       const env = createLaunchdEnvWithGatewayPort("18789");
@@ -1747,7 +1747,7 @@ describe("launchd install", () => {
     expect(message).not.toContain("is not loaded");
   });
 
-  it.each(["exit", "timeout"] as const)(
+  it.each(["exit", "timeout", "signal"] as const)(
     "accepts in-progress bootstrap output only after a completed command (%s)",
     async (termination) => {
       const env = createLaunchdEnvWithGatewayPort("18789");

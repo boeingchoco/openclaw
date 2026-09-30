@@ -2,6 +2,8 @@
 // runs report progress or completion back to the requester session.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateAgentParams } from "../../../../packages/gateway-protocol/src/index.js";
+import { formatValidationErrors } from "../../../../packages/gateway-protocol/src/validation-errors.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
@@ -1617,6 +1619,35 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("reports requester-agent delivery failure even when output stayed visible", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "Tests passed and the PR is ready for review." }],
+        deliveryStatus: {
+          status: "failed",
+          errorMessage: "Slack send failed: channel not found",
+        },
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      directIdempotencyKey: "announce-thread-delivery-status-failed",
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        taskLabel: "thread completion smoke",
+      }),
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "Slack send failed: channel not found",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "no-visible-payload suppression",
@@ -2275,6 +2306,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       }),
     });
     expectRecordFields(result, expected);
+    const request = expectRecordFields(mockCallArg(callGateway), { method: "agent" });
+    const isValid = validateAgentParams(request.params);
+    expect(isValid ? "" : formatValidationErrors(validateAgentParams.errors)).toBe("");
     if (sendMessage) {
       expect(sendMessage).not.toHaveBeenCalled();
     }

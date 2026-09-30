@@ -12,6 +12,8 @@ const privateSourceFinal = {
 };
 
 export const privateCompletionCases = [
+  { name: "private text", result: { payloads: [{ text: "private parent review" }] } },
+  { name: "media", result: { payloads: [{ mediaUrl: "https://example.com/private.png" }] } },
   {
     name: "source final",
     result: privateSourceFinal,
@@ -25,6 +27,13 @@ export const privateCompletionCases = [
     },
   },
 
+  {
+    name: "off-target final",
+    result: {
+      ...privateSourceFinal,
+      messagingToolSentTargets: [{ ...privateSourceTarget, to: "dm:OTHER" }],
+    },
+  },
   {
     name: "source final before re-yield",
     result: { ...privateSourceFinal, meta: { yielded: true } },

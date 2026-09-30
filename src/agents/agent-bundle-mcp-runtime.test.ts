@@ -759,52 +759,63 @@ describe("session MCP runtime", () => {
     expect(validator({ url: "http://example.com" }).valid).toBe(false);
   });
 
-  it("accepts valid nested union resource references over stdio", async () => {
-    const structuredContent = { node: null, label: "leaf" };
-    const tempDir = tempDirTracker.make("bundle-mcp-nested-union-schema-");
-    const serverPath = path.join(tempDir, "server.mjs");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath: path.join(tempDir, "server.log"),
-      tools: [
-        {
-          name: "nested",
-          inputSchema: { type: "object" },
-          outputSchema: {
-            $schema: "https://json-schema.org/draft/2020-12/schema",
-            type: "object",
-            properties: {
-              node: { type: ["object", "null"], $defs: { Leaf: { type: "string" } } },
-              label: { $ref: "#/properties/node/$defs/Leaf" },
+  it.each([
+    { label: "valid leaf", structuredContent: { node: null, label: "leaf" }, valid: true },
+    { label: "invalid leaf", structuredContent: { node: null, label: 42 }, valid: false },
+  ])(
+    "validates nested union resource references over stdio: $label",
+    async ({ structuredContent, valid }) => {
+      const tempDir = tempDirTracker.make("bundle-mcp-nested-union-schema-");
+      const serverPath = path.join(tempDir, "server.mjs");
+      await writeListToolsMcpServer({
+        filePath: serverPath,
+        logPath: path.join(tempDir, "server.log"),
+        tools: [
+          {
+            name: "nested",
+            inputSchema: { type: "object" },
+            outputSchema: {
+              $schema: "https://json-schema.org/draft/2020-12/schema",
+              type: "object",
+              properties: {
+                node: { type: ["object", "null"], $defs: { Leaf: { type: "string" } } },
+                label: { $ref: "#/properties/node/$defs/Leaf" },
+              },
+              required: ["node", "label"],
+              additionalProperties: false,
             },
-            required: ["node", "label"],
-            additionalProperties: false,
           },
-        },
-        { name: "healthy", inputSchema: { type: "object" } },
-      ],
-      callToolResult: { content: [], structuredContent },
-    });
-    const runtime = createSessionMcpRuntime({
-      sessionId: "session-nested-union-schema",
-      workspaceDir: tempDir,
-      cfg: { mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } } },
-    });
-    try {
-      expect((await runtime.getCatalog()).tools.map((entry) => entry.toolName)).toEqual([
-        "healthy",
-        "nested",
-      ]);
-      await expect(runtime.callTool("docs", "nested", {})).resolves.toMatchObject({
-        structuredContent,
+          { name: "healthy", inputSchema: { type: "object" } },
+        ],
+        callToolResult: { content: [], structuredContent },
       });
-      await expect(runtime.callTool("docs", "healthy", {})).resolves.toMatchObject({
-        structuredContent,
+      const runtime = createSessionMcpRuntime({
+        sessionId: "session-nested-union-schema",
+        workspaceDir: tempDir,
+        cfg: { mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } } },
       });
-    } finally {
-      await runtime.dispose();
-    }
-  });
+      try {
+        expect((await runtime.getCatalog()).tools.map((entry) => entry.toolName)).toEqual([
+          "healthy",
+          "nested",
+        ]);
+        if (valid) {
+          await expect(runtime.callTool("docs", "nested", {})).resolves.toMatchObject({
+            structuredContent,
+          });
+        } else {
+          await expect(runtime.callTool("docs", "nested", {})).rejects.toThrow(
+            "does not match the tool's output schema",
+          );
+        }
+        await expect(runtime.callTool("docs", "healthy", {})).resolves.toMatchObject({
+          structuredContent,
+        });
+      } finally {
+        await runtime.dispose();
+      }
+    },
+  );
 
   it("enforces output schemas under the canonical trimmed tool name", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-canonical-schema-");
@@ -2438,6 +2449,95 @@ describe("session MCP runtime", () => {
 describe("requester-scoped MCP connection resolution", () => {
   afterEach(async () => {
     vi.useRealTimers();
+  });
+
+  it("keys requester-scoped runtimes per sender while sharing static servers", async () => {
+    const resolverRegistry = createMcpProofPluginRegistry();
+    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+      let resolveCalls = 0;
+      const resolverApi = resolverRegistry.apiFor("test-plugin");
+      resolverApi.registerMcpServerConnectionResolver({
+        serverName: "user-mail",
+        resolve: async (ctx) => {
+          resolveCalls += 1;
+          return {
+            url: `https://mcp.example.test/${ctx.requesterSenderId}`,
+            headers: { Authorization: `Bearer ${ctx.requesterSenderId}` },
+          };
+        },
+      });
+
+      const created: Array<{
+        sessionId: string;
+        requesterScope?: SessionMcpRuntime["requesterScope"];
+        include?: string[];
+        exclude?: string[];
+      }> = [];
+      const createRuntime: RuntimeFactory = (params) => {
+        created.push({
+          sessionId: params.sessionId,
+          requesterScope: params.requesterScope,
+          include: params.includeServerNames ? [...params.includeServerNames] : undefined,
+          exclude: params.excludeServerNames ? [...params.excludeServerNames] : undefined,
+        });
+        return makeManagedRuntime(params);
+      };
+      const manager = createSessionMcpRuntimeManager({ createRuntime });
+      const cfg = {
+        mcp: {
+          servers: {
+            shared: { command: "true" },
+            "user-mail": { transport: "streamable-http" },
+          },
+        },
+      } satisfies NonNullable<RuntimeParams["cfg"]>;
+
+      const params = (sender: string) =>
+        makeRequesterParams("session-shared", cfg, sender, {
+          sessionKey: "agent:test:session-shared",
+          agentAccountId: "bot-1",
+        });
+      try {
+        await manager.getOrCreate(params("sender-a"));
+        await manager.getOrCreate(params("sender-a"));
+        expect(resolveCalls).toBe(1);
+        await manager.getOrCreate(params("sender-b"));
+
+        // Same requester reuses both static and requester-scoped entries; other sender adds one.
+        expect(created).toEqual([
+          {
+            sessionId: "session-shared",
+            requesterScope: undefined,
+            include: undefined,
+            exclude: ["user-mail"],
+          },
+          {
+            sessionId: "session-shared",
+            requesterScope: {
+              requesterSenderId: "sender-a",
+              agentAccountId: "bot-1",
+              messageChannel: "telegram",
+            },
+            include: ["user-mail"],
+            exclude: undefined,
+          },
+          {
+            sessionId: "session-shared",
+            requesterScope: {
+              requesterSenderId: "sender-b",
+              agentAccountId: "bot-1",
+              messageChannel: "telegram",
+            },
+            include: ["user-mail"],
+            exclude: undefined,
+          },
+        ]);
+        expect(manager.listSessionIds()).toEqual(["session-shared"]);
+        expect(manager.listRuntimeKeys()).toHaveLength(3);
+      } finally {
+        await manager.disposeAll();
+      }
+    });
   });
 
   it("expires static and requester runtimes at the configured idle TTL while preserving reuse and active leases", async () => {
