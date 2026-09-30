@@ -15,7 +15,6 @@ type SqliteCloseProbeResult = Readonly<{
 export async function probeSqliteNativeClose(): Promise<SqliteCloseProbeResult> {
   let directory: string | undefined;
   let worker: Worker | undefined;
-  let joined = false;
   let deadline: NodeJS.Timeout | undefined;
   let result: SqliteCloseProbeResult;
   try {
@@ -54,10 +53,9 @@ export async function probeSqliteNativeClose(): Promise<SqliteCloseProbeResult> 
       if (worker) {
         await worker.terminate();
         await nextTurn();
-        joined = true;
       }
       // A failed native join retains custody of the private directory.
-      if (directory && (!worker || joined)) {
+      if (directory) {
         await rm(directory, { recursive: true, force: true });
       }
     } catch (error) {

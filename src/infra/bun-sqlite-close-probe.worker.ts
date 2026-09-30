@@ -8,10 +8,7 @@ const retained: unknown[] = [];
 parentPort?.on("message", () => retained.length);
 
 function probe(): string {
-  const directory: unknown = workerData;
-  if (typeof directory !== "string") {
-    throw new Error("SQLite close probe requires a private directory");
-  }
+  const directory: string = workerData;
   const other = new DatabaseSync(join(directory, "unrelated.sqlite"));
   retained.push(other);
   other.exec("CREATE TABLE unrelated(x); INSERT INTO unrelated VALUES (42)");

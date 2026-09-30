@@ -1,15 +1,10 @@
-import type {
-  MessagePort,
-  Worker,
-  WorkerOptions,
-  Transferable,
-  setEnvironmentData,
-} from "node:worker_threads";
+import type { MessagePort, Worker, WorkerOptions, Transferable } from "node:worker_threads";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import type {
   BrokerResourceAttachment,
   BrokerResourceResponse,
 } from "../process/spawn-broker/resource-protocol.js";
+import type { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
 import type { RetainedOperation } from "./retained-operation.js";
 import type { NativeWorkerFailure } from "./worker-native-error.js";
 
@@ -112,7 +107,7 @@ export type NativeWorkerRequest =
       type: "create";
       id: number;
       filename: { kind: "url" | "path"; value: string };
-      environmentData: ReadonlyArray<readonly [string, Parameters<typeof setEnvironmentData>[1]]>;
+      environmentData: ReturnType<typeof captureSqliteWorkerEnvironmentData>;
       options: NativeWorkerOptions;
       transferList: Transferable[];
       resource?: NativeWorkerResourceRequest;

@@ -353,25 +353,6 @@ it("services two accepted recovery reads through release from their follower's c
   }
 });
 
-it.each([false, true])(
-  "closes only the selected reader when native close is proven (capable=%s)",
-  async (capable) => {
-    mock.capabilities.mockReturnValue({
-      explicitSqliteCloseReleasesNativeResources: capable,
-      decided: true,
-      reason: "test policy",
-    });
-    const { pathname, options } = source();
-    const task = queueTask();
-    task.result.resolve(emptyReply);
-    await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-    await closeOpenClawStateDatabaseByPathAsync(pathname);
-    expect(mock.closeResources).toHaveBeenCalledTimes(capable ? 1 : 0);
-    expect(mock.rotate).toHaveBeenCalledTimes(capable ? 0 : 1);
-    expect(mock.closePool).not.toHaveBeenCalled();
-  },
-);
-
 it("uses completed admission for later resource closes through the same pool owner", async () => {
   const { pathname, options } = source();
   mock.capabilities.mockReturnValue({

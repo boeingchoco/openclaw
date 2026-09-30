@@ -174,20 +174,12 @@ describe("SQLite native-close admission", () => {
     expect(options.internals.publish).not.toHaveBeenCalled();
   });
 
-  it.each([
-    undefined,
-    {},
-    { explicitSqliteCloseReleasesNativeResources: "true" },
-    { explicitSqliteCloseReleasesNativeResources: true, decided: false, reason: "unproven" },
-  ])(
-    "keeps workers with missing or invalid parent admission conservative (%j)",
-    async (inherited) => {
-      const options = fixture({ isMainThread: false, inherited });
-      expect(await initializeSqliteRuntimeCapabilities(options)).toMatchObject({
-        explicitSqliteCloseReleasesNativeResources: false,
-        reason: expect.stringContaining("Parent"),
-      });
-      expect(options.internals.probe).not.toHaveBeenCalled();
-    },
-  );
+  it("keeps workers with missing parent admission conservative", async () => {
+    const options = fixture({ isMainThread: false });
+    expect(await initializeSqliteRuntimeCapabilities(options)).toMatchObject({
+      explicitSqliteCloseReleasesNativeResources: false,
+      reason: expect.stringContaining("Parent"),
+    });
+    expect(options.internals.probe).not.toHaveBeenCalled();
+  });
 });

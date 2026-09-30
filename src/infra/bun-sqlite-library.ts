@@ -28,7 +28,7 @@ type CapabilityDependencies = {
   isBun: boolean;
   platform: string;
   isMainThread: boolean;
-  inherited?: unknown;
+  inherited?: SqliteRuntimeCapabilities;
   select: () => unknown;
   probe: () => Promise<SqliteCloseProbeResult>;
   publish: (value: SqliteRuntimeCapabilities) => void;
@@ -60,28 +60,6 @@ function createCapabilities(deps: CapabilityDependencies) {
   function conservative(reason: string): SqliteRuntimeCapabilities {
     return { explicitSqliteCloseReleasesNativeResources: false, decided: true, reason };
   }
-  function inherited(): SqliteRuntimeCapabilities {
-    const value = deps.inherited;
-    if (
-      value !== null &&
-      typeof value === "object" &&
-      "explicitSqliteCloseReleasesNativeResources" in value &&
-      typeof value.explicitSqliteCloseReleasesNativeResources === "boolean" &&
-      "decided" in value &&
-      typeof value.decided === "boolean" &&
-      (value.decided || !value.explicitSqliteCloseReleasesNativeResources) &&
-      "reason" in value &&
-      typeof value.reason === "string"
-    ) {
-      return {
-        explicitSqliteCloseReleasesNativeResources:
-          value.explicitSqliteCloseReleasesNativeResources,
-        reason: value.reason,
-        decided: value.decided,
-      };
-    }
-    return { ...pending, reason: "Parent did not complete SQLite close admission" };
-  }
   function settled(): SqliteRuntimeCapabilities | undefined {
     if (decision) {
       return decision;
@@ -97,7 +75,11 @@ function createCapabilities(deps: CapabilityDependencies) {
       return decide(conservative("Bun Windows native-close conformance is not qualified"));
     }
     if (!deps.isMainThread) {
-      return decide(inherited());
+      return decide({
+        ...pending,
+        reason: "Parent did not complete SQLite close admission",
+        ...deps.inherited,
+      });
     }
     return undefined;
   }
@@ -318,7 +300,7 @@ function createRuntimeSelector(): ReturnType<typeof createSelector> {
     select: selectLibrary,
   });
   let published = false;
-  const ensureSelected = (options?: SelectionOptions) => {
+  return (options?: SelectionOptions) => {
     const selection = inherited ?? select(options);
     if (sharedLibrary && isMainThread && !published) {
       // Bun's library hook is process-wide; new workers inherit the completed owner's fact.
@@ -327,7 +309,6 @@ function createRuntimeSelector(): ReturnType<typeof createSelector> {
     }
     return selection;
   };
-  return ensureSelected;
 }
 
 function runtimeSelector(): ReturnType<typeof createSelector> & {
@@ -351,7 +332,8 @@ function capabilities(options?: CapabilityOptions) {
     platform: process.platform,
     isMainThread,
     get inherited() {
-      return getEnvironmentData(WORKER_CAPABILITIES_KEY);
+      // SAFETY: Only this owner publishes this key; workers receive a structured clone of its fact.
+      return getEnvironmentData(WORKER_CAPABILITIES_KEY) as SqliteRuntimeCapabilities | undefined;
     },
     select,
     probe: async () => (await import("./bun-sqlite-close-probe.js")).probeSqliteNativeClose(),
