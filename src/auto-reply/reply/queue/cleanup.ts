@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runner/lanes.js";
-import { clearCommandLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
+import { clearCommandLane, countQueuedCommandsInLane } from "../../../process/command-queue.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -27,8 +27,8 @@ export type SessionLifecycleQueueTarget = {
   sessionId?: string;
 };
 
-function matchesSessionFollowupRun(
-  source: FollowupRun,
+function matchesSessionQueueTarget(
+  source: { agentId?: string; sessionKey?: string; sessionId?: string },
   params: {
     agentId: string;
     sessionKey: string;
@@ -37,16 +37,25 @@ function matchesSessionFollowupRun(
   },
 ): boolean {
   const agentId = normalizeAgentId(params.agentId);
-  const keyAgentId = parseAgentSessionKey(source.run.sessionKey)?.agentId;
+  const keyAgentId = parseAgentSessionKey(source.sessionKey)?.agentId;
   return (
-    normalizeOptionalString(source.run.agentId) !== undefined &&
-    normalizeAgentId(source.run.agentId) === agentId &&
+    normalizeOptionalString(source.agentId) !== undefined &&
+    normalizeAgentId(source.agentId) === agentId &&
     (!keyAgentId || normalizeAgentId(keyAgentId) === agentId) &&
-    (source.run.sessionKey === params.sessionKey ||
+    (source.sessionKey === params.sessionKey ||
       params.sessionKeyAliases?.some((key) =>
-        agentSessionKeysMatchByRequestKey(source.run.sessionKey, key),
+        agentSessionKeysMatchByRequestKey(source.sessionKey, key),
       ) === true) &&
-    source.run.sessionId === params.sessionId &&
+    source.sessionId === params.sessionId
+  );
+}
+
+function matchesSessionFollowupRun(
+  source: FollowupRun,
+  params: Parameters<typeof matchesSessionQueueTarget>[1],
+): boolean {
+  return (
+    matchesSessionQueueTarget(source.run, params) &&
     (source.admissionSessionId === undefined || source.admissionSessionId === params.sessionId)
   );
 }
@@ -67,7 +76,11 @@ function resolveSessionLifecycleQueueKeys(params: SessionLifecycleQueueTarget) {
   return {
     keys,
     sessionKeyAliases: keys.filter((key) => key !== params.sessionId),
-    laneKeys: keys.filter((key) => key === params.sessionId || parseAgentSessionKey(key) !== null),
+    matchesLaneEntry:
+      (key: string) => (target: Parameters<typeof matchesSessionQueueTarget>[0] | undefined) =>
+        target
+          ? matchesSessionQueueTarget(target, { ...params, sessionKeyAliases: keys })
+          : key === params.sessionId || parseAgentSessionKey(key) !== null,
   };
 }
 
@@ -183,7 +196,7 @@ export function clearSessionLifecycleQueues(
   params: SessionLifecycleQueueTarget & { assertCurrent: () => void },
 ): ClearSessionQueueResult {
   params.assertCurrent();
-  const { keys, sessionKeyAliases, laneKeys } = resolveSessionLifecycleQueueKeys(params);
+  const { keys, sessionKeyAliases, matchesLaneEntry } = resolveSessionLifecycleQueueKeys(params);
   const followupCleared = params.sessionId
     ? prepareSessionFollowupCleanup({
         ...params,
@@ -193,15 +206,15 @@ export function clearSessionLifecycleQueues(
       })()
     : 0;
   let laneCleared = 0;
-  for (const key of laneKeys) {
+  for (const key of keys) {
     params.assertCurrent();
-    laneCleared += clearCommandLane(resolveEmbeddedSessionLane(key));
+    laneCleared += clearCommandLane(resolveEmbeddedSessionLane(key), matchesLaneEntry(key));
   }
   return { followupCleared, laneCleared, keys };
 }
 
 export function hasSessionLifecycleQueueWork(params: SessionLifecycleQueueTarget): boolean {
-  const { keys, sessionKeyAliases, laneKeys } = resolveSessionLifecycleQueueKeys(params);
+  const { keys, sessionKeyAliases, matchesLaneEntry } = resolveSessionLifecycleQueueKeys(params);
   for (const key of keys) {
     const queue = FOLLOWUP_QUEUES.get(key);
     if (
@@ -213,8 +226,8 @@ export function hasSessionLifecycleQueueWork(params: SessionLifecycleQueueTarget
       return true;
     }
   }
-  return laneKeys.some(
-    (key) => getCommandLaneSnapshot(resolveEmbeddedSessionLane(key)).queuedCount > 0,
+  return keys.some(
+    (key) => countQueuedCommandsInLane(resolveEmbeddedSessionLane(key), matchesLaneEntry(key)) > 0,
   );
 }
 

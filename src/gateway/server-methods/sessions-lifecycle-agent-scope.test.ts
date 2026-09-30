@@ -5,7 +5,10 @@ import {
   createQueueSettings,
   createQueueTestRun,
 } from "../../auto-reply/reply/queue.test-helpers.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import {
+  clearSessionQueues,
+  hasSessionLifecycleQueueWork,
+} from "../../auto-reply/reply/queue/cleanup.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { FOLLOWUP_QUEUES } from "../../auto-reply/reply/queue/state.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
@@ -14,7 +17,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { clearCommandLane, enqueueCommandInLane } from "../../process/command-queue.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -27,12 +30,14 @@ import { sessionMutationHandlers } from "./sessions-mutations.js";
 useChatAbortRegistryFixture();
 
 it.each([
-  { method: "sessions.delete", key: "global" },
-  { method: "sessions.reset", key: "global" },
-  { method: "sessions.delete", key: "shared" },
-  { method: "sessions.reset", key: "shared" },
-  { method: "sessions.patch", key: "shared" },
-])("$method preserves another agent's $key work", async ({ method, key }) => {
+  { method: "sessions.delete", key: "global", agentId: "research" },
+  { method: "sessions.reset", key: "global", agentId: "research" },
+  { method: "sessions.delete", key: "shared", agentId: "research" },
+  { method: "sessions.reset", key: "shared", agentId: "research" },
+  { method: "sessions.patch", key: "shared", agentId: "research" },
+  { method: "sessions.reset", key: "global", agentId: "main" },
+  { method: "sessions.delete", key: "shared", agentId: "main" },
+])("$method preserves another agent's $key work ($agentId)", async ({ method, key, agentId }) => {
   const cfg = {
     ...getRuntimeConfig(),
     agents: {
@@ -41,17 +46,18 @@ it.each([
     },
   };
   setRuntimeConfigSnapshot(cfg);
-  const target = resolveGatewaySessionStoreTarget({ cfg, key, agentId: "research" });
-  const targetId = "research-session";
-  const foreignId = "main-session";
+  const foreignAgentId = agentId === "main" ? "research" : "main";
+  const target = resolveGatewaySessionStoreTarget({ cfg, key, agentId });
+  const targetId = `${agentId}-session`;
+  const foreignId = `${foreignAgentId}-session`;
   await upsertSessionEntryCore(
-    { agentId: "research", sessionKey: target.canonicalKey },
+    { agentId, sessionKey: target.canonicalKey },
     { sessionId: targetId, lifecycleRevision: "original", updatedAt: 1 },
   );
   const operation = createReplyOperation({
     sessionKey: key,
     sessionId: foreignId,
-    agentId: "main",
+    agentId: foreignAgentId,
     resetTriggered: false,
   });
   operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
@@ -68,8 +74,7 @@ it.each([
     enqueueFollowupRun(key, run, createQueueSettings(), "none", undefined, false);
     return { run, settled };
   };
-  const foreign = followup("main", foreignId, key);
-  const owned = followup("research", targetId, target.canonicalKey);
+  const foreign = followup(foreignAgentId, foreignId, key);
   const entered = createDeferred();
   const release = createDeferred();
   const lane = resolveEmbeddedSessionLane(key);
@@ -79,13 +84,31 @@ it.each([
   });
   await entered.promise;
   const foreignTask = vi.fn(async () => "preserved");
-  const queued = enqueueCommandInLane(lane, foreignTask);
+  const queued = enqueueCommandInLane(lane, foreignTask, {
+    sessionTarget: { agentId: foreignAgentId, sessionKey: key, sessionId: foreignId },
+  });
   const queuedResult = Promise.allSettled([queued]);
+  const ownedTask = vi.fn(async () => "must not run");
+  const ownedQueued = enqueueCommandInLane(lane, ownedTask, {
+    sessionTarget: { agentId, sessionKey: key, sessionId: targetId },
+  });
+  const ownedResult = Promise.allSettled([ownedQueued]);
   try {
+    expect
+      .soft(
+        hasSessionLifecycleQueueWork({
+          keys: [key],
+          agentId,
+          sessionKey: target.canonicalKey,
+          sessionId: targetId,
+        }),
+      )
+      .toBe(true);
+    const owned = followup(agentId, targetId, target.canonicalKey);
     const respond = vi.fn();
     const params = {
       key,
-      agentId: "research",
+      agentId,
       ...(method === "sessions.patch" ? { archived: true, expectedSessionId: targetId } : {}),
     };
     await handleGatewayRequest({
@@ -104,7 +127,15 @@ it.each([
     expect(foreign.settled).not.toHaveBeenCalled();
     expect(owned.settled).toHaveBeenCalledOnce();
     expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([foreign.run]);
-    const entry = loadSessionEntry({ agentId: "research", sessionKey: target.canonicalKey });
+    expect(
+      hasSessionLifecycleQueueWork({
+        keys: [key],
+        agentId,
+        sessionKey: target.canonicalKey,
+        sessionId: targetId,
+      }),
+    ).toBe(false);
+    const entry = loadSessionEntry({ agentId, sessionKey: target.canonicalKey });
     if (method === "sessions.delete") expect(entry).toBeUndefined();
     else if (method === "sessions.reset") expect(entry?.lifecycleRevision).not.toBe("original");
     else expect(entry?.archivedAt).toEqual(expect.any(Number));
@@ -112,13 +143,18 @@ it.each([
     await blocker;
     expect(await queuedResult).toEqual([{ status: "fulfilled", value: "preserved" }]);
     expect(foreignTask).toHaveBeenCalledOnce();
+    expect(await ownedResult).toEqual([
+      { status: "rejected", reason: expect.objectContaining({ name: "CommandLaneClearedError" }) },
+    ]);
+    expect(ownedTask).not.toHaveBeenCalled();
     operation.complete();
     expect(operation.result?.kind).toBe("completed");
   } finally {
     operation.complete();
     release.resolve();
     clearSessionQueues(queueKeys);
-    await Promise.allSettled([blocker, queuedResult]);
+    clearCommandLane(lane);
+    await Promise.allSettled([blocker, queuedResult, ownedResult]);
   }
 });
 
