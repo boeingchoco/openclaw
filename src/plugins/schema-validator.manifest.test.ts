@@ -29,6 +29,44 @@ describe("validatePluginSchemaValue", () => {
     expect(result).toEqual({ ok: true, value: { a: "ok" } });
   });
 
+  it.each([
+    { ref: "#%2F$defs%2Fentry", key: "entry" },
+    { ref: "#/$defs%2Fentry", key: "entry" },
+    { ref: "https://example.test/config#%2F$defs%2Fentry", key: "entry" },
+    { ref: "#%2F$defs%2Fa%7E1b", key: "a/b" },
+    { ref: "#%2F$defs%2Fpercent%252Fname", key: "percent%2Fname" },
+  ])("validates and applies defaults through URI fragment $ref", ({ ref, key }) => {
+    const value = {};
+    const schema = {
+      $id: "https://example.test/config",
+      type: "object",
+      $defs: { [key]: { type: "string", default: "ready" } },
+      properties: { label: { $ref: ref } },
+      required: ["label"],
+    };
+
+    expect(
+      validatePluginSchemaValue({ origin: "global", schema, value, applyDefaults: true }),
+    ).toEqual({ ok: true, value: { label: "ready" } });
+    expect(value).toEqual({});
+    expect(
+      validatePluginSchemaValue({ origin: "global", schema, value: { label: 42 } }),
+    ).toMatchObject({ ok: false, schemaError: false });
+  });
+
+  it.each(["#%2F$defs%2Fmissing", "#%2F$defs%2Fentry%zz", "#/$defs/entry%zz"])(
+    "reports missing or malformed URI fragment %s as an unusable schema",
+    ($ref) => {
+      expect(
+        validatePluginSchemaValue({
+          origin: "global",
+          schema: { $defs: { entry: { type: "string" } }, $ref },
+          value: "ready",
+        }),
+      ).toMatchObject({ ok: false, schemaError: true });
+    },
+  );
+
   it("flags schemaError only when the schema itself is unusable, not on ordinary value failures", () => {
     const malformedSchema = validatePluginSchemaValue({
       origin: "global",
