@@ -84,18 +84,15 @@ describe("validatePluginSchemaValue", () => {
     "#%2F$defs%2Fentry%zz",
     "#/$defs/entry%zz",
     "https://outside.example/schema#%2F$defs%2Fentry",
-  ])(
-    "reports missing or malformed URI fragment %s as an unusable schema",
-    ($ref) => {
-      expect(
-        validatePluginSchemaValue({
-          origin: "global",
-          schema: { $defs: { entry: { type: "string" } }, $ref },
-          value: "ready",
-        }),
-      ).toMatchObject({ ok: false, schemaError: true });
-    },
-  );
+  ])("reports missing or malformed URI fragment %s as an unusable schema", ($ref) => {
+    expect(
+      validatePluginSchemaValue({
+        origin: "global",
+        schema: { $defs: { entry: { type: "string" } }, $ref },
+        value: "ready",
+      }),
+    ).toMatchObject({ ok: false, schemaError: true });
+  });
 
   it("flags schemaError only when the schema itself is unusable, not on ordinary value failures", () => {
     const malformedSchema = validatePluginSchemaValue({
