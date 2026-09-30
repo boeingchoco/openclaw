@@ -3947,6 +3947,10 @@ describe("subagent registry seam flow", () => {
 
     await mod.testing.sweepOnceForTests();
 
+    const expectedConfig = {
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+      session: { mainKey: "main", scope: "per-sender" },
+    };
     await waitForFast(() => {
       findRecordCallArg(
         mocks.resolveContextEngine,
@@ -3964,26 +3968,16 @@ describe("subagent registry seam flow", () => {
           record.agentDir === "/tmp/agent-archive" &&
           record.workspaceDir === "/tmp/workspace-archive",
       );
-      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(
-        {
-          agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-          session: { mainKey: "main", scope: "per-sender" },
-        },
-        {
-          agentDir: "/tmp/agent-session",
-          workspaceDir: "/tmp/workspace-session",
-        },
-      );
-      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(
-        {
-          agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-          session: { mainKey: "main", scope: "per-sender" },
-        },
-        {
-          agentDir: "/tmp/agent-archive",
-          workspaceDir: "/tmp/workspace-archive",
-        },
-      );
+      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(expectedConfig, {
+        agentDir: "/tmp/agent-session",
+        workspaceDir: "/tmp/workspace-session",
+        initialize: mocks.ensureContextEnginesInitialized,
+      });
+      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(expectedConfig, {
+        agentDir: "/tmp/agent-archive",
+        workspaceDir: "/tmp/workspace-archive",
+        initialize: mocks.ensureContextEnginesInitialized,
+      });
     });
   });
 
