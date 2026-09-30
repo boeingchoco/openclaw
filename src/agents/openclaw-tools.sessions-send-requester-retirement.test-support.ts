@@ -15,7 +15,11 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
 } from "./admitted-run-context.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+  type EmbeddedAgentQueueHandle,
+} from "./embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
@@ -108,7 +112,17 @@ export function registerSessionsSendRequesterRetirementTests({
         return {};
       });
       const queueMessage = vi.fn(async () => {});
-      const handle = createEmbeddedRunHandle({ runId, queueMessage });
+      const handle: EmbeddedAgentQueueHandle = {
+        ...createEmbeddedRunHandle({ runId, queueMessage }),
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage: async (_text, _options, assertCurrent) => {
+            assertCurrent?.();
+            await queueMessage();
+          },
+        },
+      };
       if (mode === "steer") {
         await registerSubagentRun({
           runId,
@@ -273,7 +287,22 @@ export function registerSessionsSendRequesterRetirementTests({
   it.each([
     { scenario: "only a watched tool's authority retires", sameChild: false, revokeTool: true },
     { scenario: "two watched runs target the same child", sameChild: true, revokeTool: false },
-  ])("keeps earlier child claims when $scenario", async ({ sameChild, revokeTool }) => {
+    { scenario: "the requester finishes without yielding", sameChild: true, finish: "normal" },
+    { scenario: "the requester retires without yielding", sameChild: true, finish: "retired" },
+    {
+      scenario: "the newest task finishes first without yielding",
+      sameChild: true,
+      finish: "normal",
+      newestFirst: true,
+    },
+    {
+      scenario: "a nested requester finishes without yielding",
+      sameChild: true,
+      finish: "normal",
+      nested: true,
+    },
+  ])("keeps earlier child claims when $scenario", async (scenario) => {
+    const { sameChild, revokeTool, finish, newestFirst, nested } = scenario;
     const requesterSessionKey = "agent:main:dashboard:active-requester";
     const requesterTurnRunId = "active-requester-turn";
     const firstChildKey = "agent:main:dashboard:first-watched-child";
@@ -282,7 +311,11 @@ export function registerSessionsSendRequesterRetirementTests({
       { childSessionKey: firstChildKey, runId: "first-watched-run" },
       { childSessionKey: secondChildKey, runId: "second-watched-run" },
     ];
-    await writeEntry(requesterSessionKey, { sessionId: "active-requester", updatedAt: 1 });
+    await writeEntry(requesterSessionKey, {
+      sessionId: "active-requester",
+      updatedAt: 1,
+      ...(nested ? { spawnDepth: 1 } : {}),
+    });
     for (const childSessionKey of new Set(children.map((child) => child.childSessionKey))) {
       await writeEntry(childSessionKey, {
         sessionId: childSessionKey,
@@ -398,6 +431,12 @@ export function registerSessionsSendRequesterRetirementTests({
         ) {
           toolCurrent = false;
         }
+        if (
+          finish === "retired" &&
+          getSubagentRunByRunId("second-watched-run")?.requesterTurnRunId === requesterTurnRunId
+        ) {
+          admission.close();
+        }
         return result;
       });
     announceTesting.setDepsForTest({ callGateway: callGatewayMock });
@@ -405,12 +444,18 @@ export function registerSessionsSendRequesterRetirementTests({
     try {
       expect((await send(firstChildKey)).details).toMatchObject({ status: "accepted" });
       expect((await send(secondChildKey)).details).toMatchObject(
-        revokeTool ? { status: "error", sentBeforeError: true } : { status: "accepted" },
+        revokeTool || finish === "retired"
+          ? { status: "error", sentBeforeError: true }
+          : { status: "accepted" },
       );
       expect(toolCurrent).toBe(!revokeTool);
-      expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
+      expect(Boolean(getAdmittedRunDelegatedAuthority(admittedRunContext))).toBe(
+        finish !== "retired",
+      );
       for (const { runId } of children) {
-        expect(getSubagentRunByRunId(runId)?.requesterTurnRunId).toBe(requesterTurnRunId);
+        expect(getSubagentRunByRunId(runId)?.requesterTurnRunId).toBe(
+          finish === "retired" ? undefined : requesterTurnRunId,
+        );
       }
       expect(mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance)).toEqual(
         children.map(({ childSessionKey, runId }) => ({
@@ -419,48 +464,63 @@ export function registerSessionsSendRequesterRetirementTests({
           expectsCompletionMessage: true,
         })),
       );
-      const yielded = await withCaller(() =>
-        createSessionsYieldTool({
-          sessionId: "active-requester",
-          claimYield: createRequesterYieldCallback({
-            requesterSessionKey,
-            requesterAgentId: "main",
-            requesterTurnRunId,
-          }),
-          onYield: vi.fn(),
-        }).execute("yield-existing-claims", {}),
-      );
-      expect(yielded.details).toEqual({ status: "yielded" });
-      for (const { runId } of children) {
-        expect(getSubagentRunByRunId(runId)?.requesterTurnYielded).toBe(true);
+      if (!finish) {
+        const yielded = await withCaller(() =>
+          createSessionsYieldTool({
+            sessionId: "active-requester",
+            claimYield: createRequesterYieldCallback({
+              requesterSessionKey,
+              requesterAgentId: "main",
+              requesterTurnRunId,
+            }),
+            onYield: vi.fn(),
+          }).execute("yield-existing-claims", {}),
+        );
+        expect(yielded.details).toEqual({ status: "yielded" });
+        for (const { runId } of children) {
+          expect(getSubagentRunByRunId(runId)?.requesterTurnYielded).toBe(true);
+        }
       }
-      expect(
-        await withCaller(() =>
-          settleRequesterAfterSessionSpawns({
-            requesterSessionKey,
-            requesterAgentId: "main",
-            requesterTurnRunId,
-            requesterYielded: true,
-            acceptedSessionSpawns: mergeAcceptedSessionSpawnsForRun(
-              admission.operationalRunInstance,
-            ),
-          }),
-        ),
-      ).toBe(true);
+      if (finish !== "retired") {
+        expect(
+          await withCaller(() =>
+            settleRequesterAfterSessionSpawns({
+              requesterSessionKey,
+              requesterAgentId: "main",
+              requesterTurnRunId,
+              requesterYielded: !finish,
+              acceptedSessionSpawns: mergeAcceptedSessionSpawnsForRun(
+                admission.operationalRunInstance,
+              ),
+            }),
+          ),
+        ).toBe(true);
+      }
       for (const { runId } of children) {
         expect(getSubagentRunByRunId(runId)?.requesterTurnRunId).toBeUndefined();
       }
+      const firstIndex = newestFirst ? 1 : 0;
       const firstSettled = createDeferredCore();
       stopObserving = onSubagentRegistryPersisted(() => {
-        if (getSubagentRunByRunId(children[0]!.runId)?.cleanupCompletedAt !== undefined) {
+        const firstChild = getSubagentRunByRunId(children[firstIndex]!.runId);
+        if (!firstChild || firstChild.cleanupCompletedAt !== undefined) {
           firstSettled.resolve();
         }
       });
       admission.close();
-      childrenPending[0]!.resolve();
+      childrenPending[firstIndex]!.resolve();
       await firstSettled.promise;
+      expect(
+        getSubagentRunByRunId(children[firstIndex]!.runId),
+        "The first accepted result must retain its completion owner",
+      ).toBeDefined();
       await drainRootWork();
-      childrenPending[1]!.resolve();
+      expect(
+        calls.filter(
+          (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
+        ),
+      ).toHaveLength(0);
+      childrenPending[1 - firstIndex]!.resolve();
       await settleSessionWork();
       const requesterCalls = calls.filter(
         (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
@@ -470,7 +530,11 @@ export function registerSessionsSendRequesterRetirementTests({
         expect(requesterCalls[0]?.params?.message).toContain(`Watched child result ${runId}`);
         expect(getSubagentRunByRunId(runId)?.delivery?.status).toBe("delivered");
         expect(getSubagentRunByRunId(runId)?.requesterSettleWake).toBeUndefined();
-        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end", endedAt: Date.now() } });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "end", endedAt: Date.now() },
+        });
       }
       await settleSessionWork();
       expect(

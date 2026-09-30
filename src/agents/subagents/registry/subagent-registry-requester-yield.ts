@@ -489,7 +489,27 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
           entry.retireAfterRequesterTurn = undefined;
         }
       } else {
+        // Distinct tasks sharing a child retain one completion owner after the turn retires.
+        const completionGeneration =
+          !requesterAlreadyDeliveredFinal &&
+          new Set(entries.map((entry) => entry.childSessionKey)).size < entries.length
+            ? Math.max(
+                0,
+                ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0),
+              ) + 1
+            : undefined;
         for (const entry of entries) {
+          if (completionGeneration !== undefined) {
+            const existing = entry.requesterSettleWake;
+            entry.requesterSettleWake = {
+              ...(existing?.pauseNotice ? { pauseNotice: existing.pauseNotice } : {}),
+              ...(existing?.retireAfterSettle ? { retireAfterSettle: true } : {}),
+              status: "pending",
+              attemptCount: 0,
+              batchRunIds,
+              rearmGeneration: completionGeneration,
+            };
+          }
           if (entry.delivery) {
             entry.delivery = { ...entry.delivery };
             delete entry.delivery.requesterVisibleFinal;

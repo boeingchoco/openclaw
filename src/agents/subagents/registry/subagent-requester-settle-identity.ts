@@ -94,6 +94,15 @@ export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
   };
 }
 
+/** Completion custody can outlive a requester that finished without explicitly yielding. */
+export function hasRequesterCompletionCohort(entry: SubagentRunRecord): boolean {
+  const wake = entry.requesterSettleWake;
+  return (
+    wake?.requesterYieldBatch === true ||
+    (wake?.rearmGeneration !== undefined && wake.batchRunIds?.includes(entry.runId) === true)
+  );
+}
+
 /** A frozen completion cohort can own distinct tasks that share one child session. */
 export function isRequesterCompletionCohortCurrent(
   entry: SubagentRunRecord,

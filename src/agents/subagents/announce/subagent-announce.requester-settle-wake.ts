@@ -35,6 +35,7 @@ import {
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   buildRequesterSettleWakeIdentity,
+  hasRequesterCompletionCohort,
   isRequesterCompletionCohortCurrent,
 } from "../registry/subagent-requester-settle-identity.js";
 import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
@@ -349,9 +350,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     return false;
   }
   const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);
-  const hasUndeliveredRequiredCompletion = requiredSettled.some(
-    (entry) => entry.delivery?.status !== "delivered",
-  );
   // A yielded batch owns a rearm generation even when its child settles later.
   // Otherwise a delivered single child clears the batch before its requester wakes.
   const requesterYieldedAfterDelivery =
@@ -361,15 +359,17 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     cfg,
     agentId: requesterAgentId,
   });
-  // Explicit yield transfers continuation to this batch at every depth.
+  // A retained completion cohort owns continuation at every depth.
   // Ordinary nested waves remain owned by the descendant-settle path.
   if (
     !pauseNotice &&
     (requiredSettled.length === 0 ||
       (requiredSettled.length < 2 &&
-        !hasUndeliveredRequiredCompletion &&
+        !requiredSettled.some((entry) => entry.delivery?.status !== "delivered") &&
         !requesterYieldedAfterDelivery) ||
-      (!requesterYieldedAfterDelivery && requesterDepth >= 1))
+      (!requesterYieldedAfterDelivery &&
+        !hasRequesterCompletionCohort(currentSettledEntry) &&
+        requesterDepth >= 1))
   ) {
     await completeBatch(settledBatch, selectedState);
     return false;
