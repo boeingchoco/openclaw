@@ -843,6 +843,7 @@ describe("cron service timer regressions", () => {
         job: expect.objectContaining({
           id: "isolated-before-agent-reply-unhandled-82811",
         }),
+        routing: { defaultAgentId: "main" },
         payload: {
           text:
             'Automation "before agent reply unhandled regression" failed 1 times\n' +
