@@ -1,3 +1,4 @@
+import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 
 export function setOwnSchemaProperty(
@@ -57,30 +58,6 @@ function extendSchemaDefs(
     }
   }
   return next;
-}
-
-function decodeJsonPointerSegment(segment: string): string {
-  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
-}
-
-/**
- * Parses a local `#/...` schema reference into JSON Pointer tokens. Like the TypeBox
- * validator, this percent-decodes the URI fragment once before splitting it, so `%2F`
- * separates tokens and `~1` stays inside one token.
- */
-export function parseLocalSchemaRefPointer(ref: string): string[] | undefined {
-  if (!ref.startsWith("#")) {
-    return undefined;
-  }
-  let fragment: string;
-  try {
-    fragment = decodeURIComponent(ref.slice(1));
-  } catch {
-    return undefined;
-  }
-  return fragment.startsWith("/")
-    ? fragment.slice(1).split("/").map(decodeJsonPointerSegment)
-    : undefined;
 }
 
 function resolveJsonPointerPath(value: unknown, tokens: readonly string[]): unknown {

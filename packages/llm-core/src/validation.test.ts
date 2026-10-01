@@ -252,21 +252,22 @@ describe("validateToolArguments — root references", () => {
     }
   });
 
-  it("coerces through percent-encoded definition references like the validator", () => {
-    // Encoded names come from generators such as ts-json-schema-generator.
-    const parameters = (ref: string) => ({
+  it.each([
+    ["Partial<Filter>", "#/definitions/Partial<Filter>"],
+    ["Partial<Filter>", "#/definitions/Partial%3CFilter%3E"],
+    ["Partial<Filter>", "#%2Fdefinitions%2FPartial%3CFilter%3E"],
+    ["Filter/value~", "#%2Fdefinitions%2FFilter%7E1value%7E0"],
+    ["Filter%2Fvalue", "#/definitions/Filter%252Fvalue"],
+  ])("coerces through the definition %s referenced by %s", (name, ref) => {
+    const parameters = {
       type: "object",
       properties: { value: { $ref: ref } },
       definitions: {
-        "Partial<Filter>": { type: "object", properties: { limit: { type: "number" } } },
+        [name]: { type: "object", properties: { limit: { type: "number" } } },
       },
-    });
-    for (const ref of [
-      "#/definitions/Partial%3CFilter%3E",
-      "#%2Fdefinitions%2FPartial%3CFilter%3E",
-    ]) {
-      expect(validate(parameters(ref), { limit: "5" })).toEqual({ value: { limit: 5 } });
-    }
+    };
+    expect(validate(parameters, { limit: "5" })).toEqual({ value: { limit: 5 } });
+    expect(() => validate(parameters, { limit: "invalid" })).toThrow(/Validation failed/);
   });
 
   it("keeps union branch validators bound to each tool's root", () => {

@@ -263,6 +263,7 @@ describe("percent-encoded local references", () => {
     { modelProvider: "anthropic", modelId: "claude-sonnet-4-6" },
   ])("inlines encoded definition references for $modelProvider", (options) => {
     for (const ref of [
+      "#/definitions/Partial<Filter>",
       "#/definitions/Partial%3CFilter%3E",
       "#%2Fdefinitions%2FPartial%3CFilter%3E",
     ]) {

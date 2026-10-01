@@ -1,7 +1,7 @@
+import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import { evaluateSchemaWalk, type SchemaWalk } from "./schema-walk.js";
-import { parseLocalSchemaRefPointer } from "./tool-schema-refs.js";
 
 // Keywords that Cloud Code Assist API rejects (not compliant with their JSON Schema subset)
 export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
