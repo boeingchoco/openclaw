@@ -229,6 +229,8 @@ describe("shortenHomeInString", () => {
 
   it.skipIf(process.platform === "win32")("replaces only whole home path components", () => {
     withEnv({ OPENCLAW_HOME: undefined, HOME: "/home/al" }, () => {
+      expect(shortenHomeInString("/home/al")).toBe("~");
+      expect(shortenHomeInString("/home/al/x")).toBe("~/x");
       expect(
         shortenHomeInString("open /home/al/notes, /home/al, /home/alice/x and /mnt/home/al/x"),
       ).toBe("open ~/notes, ~, /home/alice/x and /mnt/home/al/x");
