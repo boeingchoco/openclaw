@@ -321,6 +321,17 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.enum).toBeUndefined();
   });
 
+  it("resolves percent-encoded definition references", () => {
+    const filter = { type: "object", properties: { limit: { type: "number" } } };
+    expect(
+      cleanSchemaForGemini({
+        type: "object",
+        $defs: { "Partial<Filter>": filter },
+        properties: { filter: { $ref: "#/$defs/Partial%3CFilter%3E" } },
+      }),
+    ).toStrictEqual({ type: "object", properties: { filter } });
+  });
+
   it("preserves shared definitions across inline and reference traversal", () => {
     const node = {
       type: "object",

@@ -33,14 +33,26 @@ function hasSchemaScope(schema: JsonSchemaObject): boolean {
   return ["$id", "id", "$defs", "definitions"].some((key) => key in schema);
 }
 
+// Match the TypeBox validator: percent-decode a local ref's URI fragment before
+// reading its JSON Pointer, so encoded names resolve to the same definition.
+function decodeLocalRefFragment(ref: string): string | undefined {
+  if (!ref.startsWith("#")) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(ref.slice(1));
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveRootSchemaRef(
   schema: JsonSchemaObject,
   root: JsonSchemaObject | undefined,
 ): JsonSchemaObject | undefined {
-  const match =
-    typeof schema.$ref === "string"
-      ? schema.$ref.match(/^#\/(\$defs|definitions)\/([^/]+)$/)
-      : null;
+  const fragment =
+    typeof schema.$ref === "string" ? decodeLocalRefFragment(schema.$ref) : undefined;
+  const match = fragment?.match(/^\/(\$defs|definitions)\/([^/]+)$/);
   const encodedName = match?.[2];
   if (!root || !match || encodedName === undefined || hasSchemaScope(schema)) {
     return undefined;

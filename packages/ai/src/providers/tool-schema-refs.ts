@@ -63,13 +63,32 @@ function decodeJsonPointerSegment(segment: string): string {
   return segment.replaceAll("~1", "/").replaceAll("~0", "~");
 }
 
-function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
+/**
+ * Parses a local `#/...` schema reference into JSON Pointer tokens. Like the TypeBox
+ * validator, this percent-decodes the URI fragment once before splitting it, so `%2F`
+ * separates tokens and `~1` stays inside one token.
+ */
+export function parseLocalSchemaRefPointer(ref: string): string[] | undefined {
+  if (!ref.startsWith("#")) {
+    return undefined;
+  }
+  let fragment: string;
+  try {
+    fragment = decodeURIComponent(ref.slice(1));
+  } catch {
+    return undefined;
+  }
+  return fragment.startsWith("/")
+    ? fragment.slice(1).split("/").map(decodeJsonPointerSegment)
+    : undefined;
+}
+
+function resolveJsonPointerPath(value: unknown, tokens: readonly string[]): unknown {
   let current = value;
-  for (const segment of segments) {
+  for (const key of tokens) {
     if (!current || typeof current !== "object") {
       return undefined;
     }
-    const key = decodeJsonPointerSegment(segment);
     if (Array.isArray(current)) {
       const index = /^(?:0|[1-9]\d*)$/.test(key) ? Number(key) : -1;
       if (index < 0 || index >= current.length) {
@@ -87,10 +106,8 @@ function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
 }
 
 function resolveLocalJsonPointer(rootDocument: unknown, ref: string): unknown {
-  if (!ref.startsWith("#/")) {
-    return undefined;
-  }
-  return resolveJsonPointerPath(rootDocument, ref.slice(2).split("/"));
+  const tokens = parseLocalSchemaRefPointer(ref);
+  return tokens ? resolveJsonPointerPath(rootDocument, tokens) : undefined;
 }
 
 export const SCHEMA_MAP_KEYS = new Set([
@@ -121,17 +138,18 @@ function tryResolveLocalRef(
   defs: SchemaDefs | undefined,
   rootDocument: unknown,
 ): unknown {
-  const match = ref.match(/^#\/(\$defs|definitions)\/([^/]+)(?:\/(.*))?$/);
-  if (match && defs) {
-    const namespace = match[1] === "$defs" ? defs.$defs : defs.definitions;
-    const name = decodeJsonPointerSegment(match[2] ?? "");
-    const resolved = name ? namespace.get(name) : undefined;
+  const tokens = parseLocalSchemaRefPointer(ref);
+  if (!tokens) {
+    return undefined;
+  }
+  const [table, name, ...remainingPath] = tokens;
+  if (defs && name && (table === "$defs" || table === "definitions")) {
+    const resolved = (table === "$defs" ? defs.$defs : defs.definitions).get(name);
     if (resolved !== undefined) {
-      const remainingPath = match[3] ? match[3].split("/") : [];
       return resolveJsonPointerPath(resolved, remainingPath);
     }
   }
-  return resolveLocalJsonPointer(rootDocument, ref);
+  return resolveJsonPointerPath(rootDocument, tokens);
 }
 
 function inlineLocalSchemaRefsWithDefs(
@@ -160,7 +178,8 @@ function inlineLocalSchemaRefsWithDefs(
     }
     const resolved = tryResolveLocalRef(refValue, nextDefs, rootDocument);
     if (resolved === undefined) {
-      if (refValue.startsWith("#/")) {
+      // Keep definition tables for any local pointer left in place, encoded or not.
+      if (refValue.startsWith("#/") || parseLocalSchemaRefPointer(refValue)) {
         state.unresolvedLocalRefs = true;
       }
       return { ...obj };

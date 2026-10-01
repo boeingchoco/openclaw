@@ -252,6 +252,23 @@ describe("validateToolArguments — root references", () => {
     }
   });
 
+  it("coerces through percent-encoded definition references like the validator", () => {
+    // Encoded names come from generators such as ts-json-schema-generator.
+    const parameters = (ref: string) => ({
+      type: "object",
+      properties: { value: { $ref: ref } },
+      definitions: {
+        "Partial<Filter>": { type: "object", properties: { limit: { type: "number" } } },
+      },
+    });
+    for (const ref of [
+      "#/definitions/Partial%3CFilter%3E",
+      "#%2Fdefinitions%2FPartial%3CFilter%3E",
+    ]) {
+      expect(validate(parameters(ref), { limit: "5" })).toEqual({ value: { limit: 5 } });
+    }
+  });
+
   it("keeps union branch validators bound to each tool's root", () => {
     const branch = { anyOf: [{ $ref: "#/$defs/value" }, { type: "null" }] };
     for (const type of ["array", "object", "array"]) {
