@@ -79,6 +79,41 @@ it("splits at exact rendered budgets while retaining source and formatting", () 
   }
 });
 
+it("bisects overflowing chunks instead of rendering every shorter prefix", () => {
+  const ir = markdownToIR("**a < b** ".repeat(600));
+  let renders = 0;
+  const chunks = renderStringChunks(ir, 1_000, (chunk) => {
+    renders += 1;
+    return renderEscapedHtml(chunk);
+  });
+
+  expect(chunks.map((chunk) => chunk.source.text).join("")).toBe(ir.text);
+  expect(chunks.every((chunk) => chunk.rendered.length <= 1_000)).toBe(true);
+  expect(renders).toBeLessThan(200);
+});
+
+it("keeps an auto-link whole when its sliced prefix renders longer", () => {
+  const profile = FormatCapabilityProfile.define({
+    mechanism: "ranges",
+    constructs: { linkLabel: "fallback" },
+    chunk: { limit: 49, unit: "chars" },
+  });
+  const chunks = renderMarkdownIRChunksWithinLimit({
+    ir: markdownToIR("https://example.com/a/b/c [docs](https://example.com/guide)", {
+      linkify: true,
+    }),
+    limit: profile.chunk.limit,
+    renderChunk: (chunk) =>
+      renderMarkdownWithAttributedRanges(chunk, { styleMap: {}, trimEnd: true }, profile).text,
+    measureRendered: (rendered) => rendered.length,
+  });
+
+  expect(chunks.map((chunk) => chunk.rendered)).toEqual([
+    "https://example.com/a/b/c",
+    "docs (https://example.com/guide)",
+  ]);
+});
+
 it.each(["A".repeat(128), `${"A".repeat(230)}😀`])(
   "keeps internal code whitespace away from message edges: %s",
   (first) => {

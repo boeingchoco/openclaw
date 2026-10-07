@@ -92,30 +92,63 @@ function splitMarkdownIRByRenderedLimit<TRendered>(
   options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
 ): MarkdownIR[] {
   const currentTextLength = chunk.text.length;
-  // Rendered length is not guaranteed to be monotonic after escaping/link or
-  // file-reference rewriting, so test exact candidates from longest to shortest.
-  for (let candidateLength = currentTextLength - 1; candidateLength >= 1; candidateLength -= 1) {
+  const fits = (source: MarkdownIR) =>
+    options.measureRendered(renderCandidate(options, source).output.rendered) <= renderedLimit;
+  const safeCandidateLength = findFittingPrefixLength(chunk, fits);
+  if (safeCandidateLength === 0) {
+    return [chunk];
+  }
+  const split = splitMarkdownIRPreserveWhitespace(chunk, safeCandidateLength);
+  const firstChunk = split[0];
+  if (firstChunk && fits(firstChunk)) {
+    return split;
+  }
+  return [
+    sliceMarkdownIR(chunk, 0, safeCandidateLength),
+    sliceMarkdownIR(chunk, safeCandidateLength, currentTextLength),
+  ];
+}
+
+function findFittingPrefixLength(chunk: MarkdownIR, fits: (source: MarkdownIR) => boolean): number {
+  // Each probe renders a whole prefix, so bisect instead of testing every length.
+  // The caller already measured the full chunk as overflowing.
+  let fitting = 0;
+  let overflowing = chunk.text.length;
+  let fittingLength = 0;
+  while (overflowing - fitting > 1) {
+    let candidateLength = fitting + Math.floor((overflowing - fitting) / 2);
+    // A sliced link can render longer than the completed link (for example a
+    // partial auto-link that repeats its URL), so measure the completed link
+    // before discarding everything after it.
+    const link = chunk.links.find(
+      (span) => span.start < candidateLength && candidateLength < span.end,
+    );
+    if (link && link.end < overflowing) {
+      candidateLength = link.end;
+    }
     const safeCandidateLength = findGraphemeChunkEnd(chunk.text, 0, candidateLength);
-    const candidate = sliceMarkdownIR(chunk, 0, safeCandidateLength);
-    const rendered = renderCandidate(options, candidate).output.rendered;
-    if (options.measureRendered(rendered) <= renderedLimit) {
-      const split = splitMarkdownIRPreserveWhitespace(chunk, safeCandidateLength);
-      const firstChunk = split[0];
-      if (
-        firstChunk &&
-        options.measureRendered(renderCandidate(options, firstChunk).output.rendered) <=
-          renderedLimit
-      ) {
-        return split;
-      }
-      return [
-        sliceMarkdownIR(chunk, 0, safeCandidateLength),
-        sliceMarkdownIR(chunk, safeCandidateLength, currentTextLength),
-      ];
+    if (fits(sliceMarkdownIR(chunk, 0, safeCandidateLength))) {
+      fitting = candidateLength;
+      fittingLength = safeCandidateLength;
+    } else {
+      overflowing = candidateLength;
+    }
+  }
+  if (fittingLength > 0) {
+    return fittingLength;
+  }
+
+  // Rendered length is not guaranteed to be monotonic after escaping/link or
+  // file-reference rewriting, so when bisection finds no fit, test exact
+  // candidates from longest to shortest.
+  for (let candidateLength = chunk.text.length - 1; candidateLength >= 1; candidateLength -= 1) {
+    const safeCandidateLength = findGraphemeChunkEnd(chunk.text, 0, candidateLength);
+    if (fits(sliceMarkdownIR(chunk, 0, safeCandidateLength))) {
+      return safeCandidateLength;
     }
     candidateLength = Math.min(candidateLength, safeCandidateLength);
   }
-  return [chunk];
+  return 0;
 }
 
 function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: number): number {
