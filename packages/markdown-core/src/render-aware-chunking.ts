@@ -110,45 +110,61 @@ function splitMarkdownIRByRenderedLimit<TRendered>(
 }
 
 function findFittingPrefixLength(chunk: MarkdownIR, fits: (source: MarkdownIR) => boolean): number {
-  // Each probe renders a whole prefix, so bisect instead of testing every length.
-  // The caller already measured the full chunk as overflowing.
-  let fitting = 0;
-  let overflowing = chunk.text.length;
+  const { text } = chunk;
+  const fitsAt = (length: number) => fits(sliceMarkdownIR(chunk, 0, length));
+  // Each probe renders a whole prefix, so testing every length is quadratic.
+  // Escaping, auto-link, and file-reference rewriting can make a longer prefix
+  // render shorter, but only by rewriting a whitespace-delimited token or a
+  // `<...>` token by what surrounds it. Bisect token starts, where every earlier
+  // token is complete and followed by whitespace, then test exact lengths below
+  // the first overflowing start from longest to shortest. The caller already
+  // measured the full chunk as overflowing.
+  const starts = findTokenStarts(text);
+  let fitting = -1;
+  let overflowing = starts.length;
   let fittingLength = 0;
   while (overflowing - fitting > 1) {
-    let candidateLength = fitting + Math.floor((overflowing - fitting) / 2);
-    // A sliced link can render longer than the completed link (for example a
-    // partial auto-link that repeats its URL), so measure the completed link
-    // before discarding everything after it.
-    const link = chunk.links.find(
-      (span) => span.start < candidateLength && candidateLength < span.end,
-    );
-    if (link && link.end < overflowing) {
-      candidateLength = link.end;
-    }
-    const safeCandidateLength = findGraphemeChunkEnd(chunk.text, 0, candidateLength);
-    if (fits(sliceMarkdownIR(chunk, 0, safeCandidateLength))) {
-      fitting = candidateLength;
-      fittingLength = safeCandidateLength;
+    const index = fitting + Math.floor((overflowing - fitting) / 2);
+    const length = findGraphemeChunkEnd(text, 0, starts[index] ?? text.length);
+    if (fitsAt(length)) {
+      fitting = index;
+      fittingLength = length;
     } else {
-      overflowing = candidateLength;
+      overflowing = index;
     }
-  }
-  if (fittingLength > 0) {
-    return fittingLength;
   }
 
-  // Rendered length is not guaranteed to be monotonic after escaping/link or
-  // file-reference rewriting, so when bisection finds no fit, test exact
-  // candidates from longest to shortest.
-  for (let candidateLength = chunk.text.length - 1; candidateLength >= 1; candidateLength -= 1) {
-    const safeCandidateLength = findGraphemeChunkEnd(chunk.text, 0, candidateLength);
-    if (fits(sliceMarkdownIR(chunk, 0, safeCandidateLength))) {
+  const upperLength = starts[overflowing] ?? text.length;
+  for (let candidateLength = upperLength - 1; candidateLength >= 1; candidateLength -= 1) {
+    const safeCandidateLength = findGraphemeChunkEnd(text, 0, candidateLength);
+    if (safeCandidateLength <= fittingLength) {
+      break;
+    }
+    if (fitsAt(safeCandidateLength)) {
       return safeCandidateLength;
     }
     candidateLength = Math.min(candidateLength, safeCandidateLength);
   }
-  return 0;
+  return fittingLength;
+}
+
+function findTokenStarts(text: string): number[] {
+  // Slack keeps a complete `<https://...|label>` or mention token raw but
+  // escapes a partial one, so a label with spaces stays one token.
+  const angleTokens = Array.from(text.matchAll(/<[^\s>][^>\n]*>/g), ({ index, 0: token }) => ({
+    start: index,
+    end: index + token.length,
+  }));
+  const starts: number[] = [];
+  for (let index = 1; index < text.length; index += 1) {
+    if (
+      /\s/.test(text[index - 1] ?? "") &&
+      !angleTokens.some((token) => token.start < index && index < token.end)
+    ) {
+      starts.push(index);
+    }
+  }
+  return starts;
 }
 
 function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: number): number {
