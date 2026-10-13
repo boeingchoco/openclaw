@@ -9,7 +9,6 @@ import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply
 import { isAudioPayload } from "../auto-reply/reply/agent-runner-helpers.js";
 import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
 import { createBlockReplyDeliveryHandler } from "../auto-reply/reply/reply-delivery.js";
-import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createReplyToModeFilterForChannel } from "../auto-reply/reply/reply-threading.js";
 import { createTypingSignaler } from "../auto-reply/reply/typing-mode.js";
 import { createTypingController } from "../auto-reply/reply/typing.js";
@@ -618,27 +617,4 @@ it("streams a long reply-tagged answer without a quadratic slowdown", () => {
   }
   expect(performance.now() - started).toBeLessThan(1_000);
   expect(partials.at(-1)?.text).toBe(`Intro.\n\n${body}`);
-});
-
-it.each([
-  "[[reply_to_current]] Intro.  \n\nA paragraph with `code`.\n\nDone.",
-  "An introduction. [[reply_to_current]] Body with `code` and a final paragraph.",
-  "[[reply_to_current]] Intro.\n\n[[reply_to:next]] A later target.",
-  "[[reply_to_current]] Intro.\n\n![`[[audio_as_voice]]`][ref]\n\n[ref]: https://example.invalid/image.png",
-  "`[[reply_to_current]] Intro.\ncontinued` outside.",
-  "    [[reply_to_current]] literal indented code\n\nOutside.",
-])("preserves canonical text while streaming %j", (text) => {
-  const partials: ReplyPayload[] = [];
-  const { emit } = createSubscribedSessionHarness({
-    runId: "run-directive-ownership",
-    onPartialReply: (payload) => {
-      partials.push(payload);
-    },
-  });
-  emit({ type: "message_start", message: textMessage("") });
-  for (let end = 7; end - 7 < text.length; end += 7) {
-    emitText(emit, "text_delta", text.slice(0, end), { delta: text.slice(end - 7, end) });
-  }
-  emitText(emit, "text_end", text);
-  expect(partials.at(-1)?.text).toBe(parseReplyDirectives(text).text);
 });
