@@ -775,6 +775,7 @@ export type ReductionState = {
 
 type ReductionOptions = {
   final: boolean;
+  recoverUnclosed?: boolean;
   mode: RecoveryMode;
   scope: "all" | "leading";
   start?: number;
@@ -911,7 +912,7 @@ export function reduceReasoningText(
         options.mode === "static-preserve" ||
         (options.mode === "static-strict" && !pending.visibleBefore && !pending.protectedClose) ||
         (options.mode === "visible" && !pending.protectedClose);
-      if (recoverAsText) {
+      if (recoverAsText && options.recoverUnclosed !== false) {
         const value =
           options.mode === "visible" && pending.visibleBefore
             ? pending.openTag + pending.content
