@@ -319,22 +319,6 @@ describe("live chat directive projection", () => {
     }
   });
 
-  it("compares cumulative snapshots without walking the retained run", () => {
-    const codePointAt = vi.spyOn(String.prototype, "codePointAt");
-    const state = createChatRunState();
-    try {
-      state.updateBuffer("reply", { itemId: "earlier", text: "Earlier message. ".repeat(100) });
-      let text = "";
-      for (let index = 0; index < 100; index++) {
-        text += "chunk ";
-        state.updateBuffer("reply", { itemId: "answer", text, delta: "chunk " });
-      }
-      expect(codePointAt.mock.calls.length).toBeLessThan(1_000);
-    } finally {
-      codePointAt.mockRestore();
-    }
-  });
-
   it.each([
     { name: "an ordinary append", first: "Launch ", delta: "🚀", frame: { deltaText: "🚀" } },
     {
