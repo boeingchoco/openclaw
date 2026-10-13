@@ -630,6 +630,7 @@ it.each([
 ])("preserves canonical text while streaming %j", (text) => {
   const partials: ReplyPayload[] = [];
   const { emit } = createSubscribedSessionHarness({
+    runId: "run-directive-ownership",
     onPartialReply: (payload) => {
       partials.push(payload);
     },
