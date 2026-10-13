@@ -500,9 +500,7 @@ function createMarkdownOwnershipCache() {
       const growing =
         boundary !== undefined || recentOwnership.some((entry) => text.startsWith(entry.text));
       const next =
-        growing && !text.includes("]:")
-          ? createSettledBoundary(text, parsed, boundary)
-          : undefined;
+        growing && !text.includes("]:") ? createSettledBoundary(text, parsed, boundary) : undefined;
       if (next && boundary) {
         // findSettledBoundary moved the boundary it returned to the front.
         settledBoundaries[0] = next;
