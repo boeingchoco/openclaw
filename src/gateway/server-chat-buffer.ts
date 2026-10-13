@@ -158,6 +158,16 @@ export const updateBuffer = (
     commonEnd = previousEnd;
   } else {
     const limit = Math.min(previousEnd, end);
+    // Producers send cumulative text, so most snapshots extend the retained run. Compare
+    // that prefix natively (startsWith stays per-character on rope strings) and walk only
+    // its last unit, which can pair with the snapshot's next unit.
+    if (
+      previous &&
+      end >= previousEnd &&
+      snapshot.text.slice(retainedOffset - sourceOffset, previousEnd - sourceOffset) === previous
+    ) {
+      commonEnd = previousEnd - 1;
+    }
     while (commonEnd < limit) {
       const point = previous.codePointAt(commonEnd - retainedOffset);
       if (point !== snapshot.text.codePointAt(commonEnd - sourceOffset)) {
