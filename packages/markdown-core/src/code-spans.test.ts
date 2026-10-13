@@ -208,6 +208,12 @@ describe("markdown-core code spans", () => {
         }
         const candidate = prefix + fork;
         expect(parseMarkdownOwnership(candidate)).toEqual(parseMarkdownOwnership(candidate, whole));
+        if (!fork) {
+          const interleaved = `\`\`\`\n${prefix}`;
+          expect(parseMarkdownOwnership(interleaved)).toEqual(
+            parseMarkdownOwnership(interleaved, whole),
+          );
+        }
         expect(findMarkdownCodeRegions(candidate)).toEqual(
           findMarkdownCodeRegions(candidate, whole),
         );
