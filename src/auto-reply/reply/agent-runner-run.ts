@@ -150,9 +150,9 @@ export async function runReplyAgent(
             payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0],
           ) => {
             const observed = await settleProgressVisibilityCallbackResult(onPartialReply(payload));
-            if (observed.visible && hasOutboundReplyContent(payload, { trimText: true })) {
-              didDeliverVisiblePartialReply = true;
-            }
+            // Lazy partial text re-sanitizes the full reply; stop reading once visible.
+            didDeliverVisiblePartialReply ||=
+              observed.visible && hasOutboundReplyContent(payload, { trimText: true });
             return observed.result;
           },
         }
