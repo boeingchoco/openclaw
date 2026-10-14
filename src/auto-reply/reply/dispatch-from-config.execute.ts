@@ -187,7 +187,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       await waitForReplyDispatcherIdle(dispatcher, getDispatchAbortSignal());
                     },
                     onVisible: (payload) => {
-                      // Lazy partial text re-sanitizes the full reply; stop reading once visible.
                       didDeliverVisiblePartialReply ||= hasOutboundReplyContent(payload, {
                         trimText: true,
                       });

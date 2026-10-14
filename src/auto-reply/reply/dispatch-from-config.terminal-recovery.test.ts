@@ -267,13 +267,15 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       _ctx,
       options,
     ) => {
-      for (const text of ["first", "first second", "first second third"]) {
+      let text = "";
+      for (let index = 0; index < 256; index++) {
         await options?.onPartialReply?.({
           get text() {
             textReads.push(text);
             return text;
           },
         });
+        text += "x";
       }
       throw resolverError;
     };
@@ -284,7 +286,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
 
     const result = await dispatchReplyFromConfig(dispatchParams);
 
-    expect(textReads).toEqual(["first"]);
+    expect(textReads).toEqual(["", "x"]);
     expect(result.queuedFinal).toBe(true);
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
