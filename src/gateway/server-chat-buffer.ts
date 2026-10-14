@@ -158,9 +158,8 @@ export const updateBuffer = (
     commonEnd = previousEnd;
   } else {
     const limit = Math.min(previousEnd, end);
-    // Producers send cumulative text, so most snapshots extend the retained run. Compare
-    // that prefix natively (startsWith stays per-character on rope strings) and walk only
-    // its last unit, which can pair with the snapshot's next unit.
+    // Compare cumulative prefixes natively; corrections still need the full walk.
+    // Recheck the last code unit because an append can complete a surrogate pair.
     if (
       previous &&
       end >= previousEnd &&
