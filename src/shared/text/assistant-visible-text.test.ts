@@ -7,6 +7,7 @@ import {
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
   stripToolCallXmlTags,
+  toolCallXmlTextFilter,
 } from "./assistant-visible-text.js";
 import { createTextProjection } from "./text-projection.js";
 
@@ -191,6 +192,64 @@ describe("stripToolCallXmlTags", () => {
     const text =
       '\ud800🦊<parameter note="<>"/>one<parameter note=\'><\'>two</parameter><tool_call note=">"/>🦊\udfff';
     expect(stripToolCallXmlTags(text)).toBe("\ud800🦊onetwo🦊\udfff");
+  });
+});
+
+describe("toolCallXmlTextFilter projection", () => {
+  const example =
+    'Intro\n\n```xml\n<function_calls>\n<invoke name="exec">\n<parameter name="command">ls</parameter>\n</invoke>\n</function_calls>\n```\n\nAfter the example.\n';
+
+  it.each([
+    {
+      name: "a complete call in one append",
+      chunks: [example, '<tool_call>{"name":"x"}</tool_call>\nDone'],
+      expected: `${example}\nDone`,
+    },
+    {
+      name: "a tag head split across appends",
+      chunks: [
+        example,
+        "<inv",
+        'oke name="x">\n<parameter name="p">v</parameter>\n</invoke>',
+        "\nDone",
+      ],
+      expected: `${example}\nDone`,
+    },
+    {
+      name: "a payload that starts on a later line",
+      chunks: [example, "<tool_call>", "\n a=b", '\n{"name":"x"}', "\nDone"],
+      expected: example,
+    },
+    {
+      name: "a payload after an attribute that spans later code",
+      chunks: [example, "<tool_call>", '\n a="`x`\n\nNext', '"\n{"name":"x"}', "\nDone"],
+      expected: example,
+    },
+    {
+      name: "a call that a table row moves out of inline code",
+      chunks: [example, '| `a | <tool_call>{"name":"x"}</tool_call>` |', "\n|-", "|-|"],
+      expected: `${example}| \`a | \` |\n|-|-|`,
+    },
+    {
+      name: "a call that a later definition moves into image alt text",
+      chunks: [
+        example,
+        'See ![`x: <invoke name="x">{"a":1}</invoke>`][ref] now.\n\nNext.\n\n',
+        "More.",
+        "\n\n",
+        "[ref]: /u\n",
+      ],
+      expected: `${example}See ![\`x: \`][ref] now.\n\nNext.\n\nMore.\n\n[ref]: /u\n`,
+    },
+  ])("hides $name after a settled code example", ({ chunks, expected }) => {
+    for (const streaming of [false, true]) {
+      const filter = toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }, streaming);
+      const projection = createTextProjection([filter]);
+      for (const chunk of chunks) {
+        expect(projection.append(chunk).text).toBe(filter.transform(projection.source));
+      }
+      expect(projection.text).toBe(expected);
+    }
   });
 });
 

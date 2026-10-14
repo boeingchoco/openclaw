@@ -14,6 +14,7 @@ import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
   applyTextFilters,
   createConditionalTextProjector,
+  createSettledCodeProjector,
   leadingEmptyLinesTextFilter,
   trimTextFilter,
   type TextFilter,
@@ -68,12 +69,15 @@ const TOOL_CALL_XML_PAYLOAD_START_RE =
 const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
+// An unfinished tag head that an append could still complete into a tool-call tag.
+const TOOL_CALL_TAG_HEAD = String.raw`<\s*(?:\/\s*)?([\w:]*)`;
+const TOOL_CALL_TAG_PREFIX_RE = new RegExp(`^${TOOL_CALL_TAG_HEAD}$`);
 
 function isToolCallTagPrefix(text: string, start: number): boolean {
   if (start < 0) {
     return false;
   }
-  const match = /^<\s*(?:\/\s*)?([\w:]*)$/.exec(text.slice(start));
+  const match = TOOL_CALL_TAG_PREFIX_RE.exec(text.slice(start));
   if (!match) {
     return false;
   }
@@ -721,14 +725,16 @@ export const minimaxToolCallTextFilter: TextFilter = {
   activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
 };
 
+// Tool-call tokens and an unfinished tag head at the tail are the only tag starts the
+// transform can act on, now or after an append; any other "<" stays literal.
+const TOOL_CALL_MARKER_RE = new RegExp(`${TOOL_CALL_QUICK_RE.source}|${TOOL_CALL_TAG_HEAD}$`, "i");
+
 export function toolCallXmlTextFilter(
   options: StripToolCallXmlOptions = {},
   streaming = false,
 ): TextFilter {
-  return {
-    transform: (text) => stripToolCallXmlTagsInternal(text, options, streaming),
-    activationTokens: ["<"],
-  };
+  const transform = (text: string) => stripToolCallXmlTagsInternal(text, options, streaming);
+  return { transform, create: () => createSettledCodeProjector(transform, TOOL_CALL_MARKER_RE) };
 }
 
 export const legacyBracketToolCallTextFilter: TextFilter = {

@@ -1,6 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp } from "../regexp.js";
-import { findCodeRegions } from "./code-regions.js";
+import {
+  findCodeRegions,
+  findSettledCodeEnd,
+  startsLineAfter,
+  type CodeRegion,
+} from "./code-regions.js";
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
@@ -52,6 +57,58 @@ export function createActivatedProjector(
     }
     return active;
   });
+}
+
+/**
+ * Skip the canonical transform on appends while every marker sits in code whose Markdown
+ * ownership cannot change. `marker` matches at each position the transform can act on,
+ * including positions an append could still complete; other positions stay inert. The
+ * transform must leave markers inside code untouched, as both directive and tool-call
+ * stripping do.
+ */
+export function createSettledCodeProjector(
+  transform: (text: string) => string,
+  marker: RegExp,
+): TextProjector {
+  const pattern = new RegExp(marker.source, `${marker.flags.replace("g", "")}g`);
+  // Markers before this offset sit in settled code; unmatched positions stay inert.
+  let settled = 0;
+  // Markers in prose or containers never settle; space failed proofs so they stay O(n) total.
+  let nextProof = 0;
+  let markers: CodeRegion[] = [];
+  let delta = "";
+  return createConditionalTextProjector(
+    (text) => {
+      const projected = transform(text);
+      const last = markers.at(-1);
+      if (
+        projected === text &&
+        last &&
+        text.length >= nextProof &&
+        startsLineAfter(text, delta, last.start)
+      ) {
+        if (findSettledCodeEnd(text, markers) === undefined) {
+          nextProof = text.length + (text.length >> 2);
+        } else {
+          settled = text.length;
+        }
+      }
+      return projected;
+    },
+    (input) => {
+      delta = input.delta ?? input.text;
+      markers = [];
+      pattern.lastIndex = settled;
+      for (let match = pattern.exec(input.text); match; match = pattern.exec(input.text)) {
+        markers.push({ start: match.index, end: match.index + 1 });
+        pattern.lastIndex = match.index + 1;
+      }
+      if (!markers.length) {
+        settled = input.text.length;
+      }
+      return markers.length > 0;
+    },
+  );
 }
 
 export function applyTextFilters(input: string, filters: readonly TextFilter[]): string {

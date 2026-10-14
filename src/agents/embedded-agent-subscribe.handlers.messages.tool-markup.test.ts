@@ -106,6 +106,32 @@ describe.each(["ollama", "openai-completions", "openai-responses"] as const)(
       },
     );
 
+    it("streams a long reply that quotes tool-call XML without a quadratic slowdown", async () => {
+      const example =
+        '```xml\n<function_calls>\n<invoke name="exec">\n<parameter name="command">ls</parameter>\n</invoke>\n</function_calls>\n```';
+      const steps = Array.from(
+        { length: 300 },
+        (_, index) => `Step ${index} keeps a short queue so bursts never starve the loop.\n\n`,
+      );
+      const text = `The raw output looked like this:\n\n${example}\n\n${steps.join("")}Done.`;
+      const context = createMessageUpdateContext();
+      const started = performance.now();
+      for (let end = 40; end - 40 < text.length; end += 40) {
+        const partial = message(text.slice(0, end));
+        await updateMessage(context, {
+          message: partial,
+          assistantMessageEvent: {
+            type: "text_delta",
+            delta: text.slice(end - 40, end),
+            partial,
+            contentIndex: 0,
+          },
+        });
+      }
+      expect(performance.now() - started).toBeLessThan(1_000);
+      expect(context.state.assistantStream?.text).toBe(text);
+    });
+
     it.each(["Use <tool_call>exec", "Use <invoke", "Use <tool_"])(
       "restores the terminal literal %s after withholding its ambiguous suffix",
       async (text) => {
