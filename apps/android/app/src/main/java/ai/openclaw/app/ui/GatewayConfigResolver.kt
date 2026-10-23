@@ -59,10 +59,14 @@ internal enum class GatewaySavedAuthAction {
   REPLACE_SETUP,
 }
 
-/** Endpoint plus the credential ownership decision applied by MainViewModel. */
+/**
+ * Endpoint plus the credential ownership decision applied by MainViewModel. [customHeaders] merge
+ * into a TLS endpoint's saved proxy headers by name; empty keeps them unchanged.
+ */
 internal data class GatewayConnectPlan(
   val config: GatewayConnectConfig,
   val savedAuthAction: GatewaySavedAuthAction,
+  val customHeaders: Map<String, String> = emptyMap(),
 )
 
 /** Validation reason used by setup, QR, and manual endpoint copy. */

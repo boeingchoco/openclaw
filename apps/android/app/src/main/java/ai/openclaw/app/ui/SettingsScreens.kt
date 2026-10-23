@@ -1526,6 +1526,8 @@ private fun GatewaySettingsScreen(
   var tokenInput by remember { mutableStateOf("") }
   var bootstrapTokenInput by remember { mutableStateOf("") }
   var passwordInput by remember { mutableStateOf("") }
+  // Headers belong to the address beside them; a connect that replaces that address clears them.
+  val customHeadersInput = remember(manualHost, manualPort, manualTls) { GatewayCustomHeadersInput() }
   var setupValidationText by remember { mutableStateOf<String?>(null) }
   var manualValidationText by remember { mutableStateOf<String?>(null) }
   var showDiagnostics by rememberSaveable { mutableStateOf(false) }
@@ -1672,7 +1674,7 @@ private fun GatewaySettingsScreen(
         tokenInput = if (useSetupCode) "" else tokenInput,
         bootstrapTokenInput = if (useSetupCode) "" else bootstrapTokenInput,
         passwordInput = if (useSetupCode) "" else passwordInput,
-      )
+      )?.let { if (useSetupCode) it else it.copy(customHeaders = customHeadersInput.forConnect()) }
     if (plan == null) {
       val message = nativeString("Enter a valid setup code or gateway address.")
       if (useSetupCode) setupValidationText = message else manualValidationText = message
@@ -1955,6 +1957,9 @@ private fun GatewaySettingsScreen(
           label = nativeString("Password"),
           secret = true,
         )
+        if (transport.effectiveTls) {
+          GatewayCustomHeadersEditor(customHeadersInput)
+        }
         manualValidationText?.let {
           Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
         }

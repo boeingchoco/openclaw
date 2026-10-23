@@ -583,7 +583,7 @@ class SidebarGatewayPickerTest {
         "Token (optional)" to "synthetic-token",
         "Password (optional)" to "synthetic-password",
       )
-    for ((label, value) in fields) {
+    for ((label, value) in fields + listOf("Header name" to "CF-Access-Client-Id", "Header value" to "synthetic-client-id")) {
       composeRule.onNodeWithContentDescription(label).performScrollTo().performTextReplacement(value)
       composeRule.onNodeWithText(label, useUnmergedTree = true).assertIsDisplayed()
     }
@@ -592,7 +592,10 @@ class SidebarGatewayPickerTest {
     composeRule.runOnIdle { assertEquals(entries, prefs.gatewayRegistry.entries.value) }
     composeRule.onNodeWithText("Cancel").performScrollTo().performClick()
     composeRule.onNodeWithTag("gateway-addition").assertDoesNotExist()
-    composeRule.runOnIdle { assertEquals(entries, prefs.gatewayRegistry.entries.value) }
+    composeRule.runOnIdle {
+      assertEquals(entries, prefs.gatewayRegistry.entries.value)
+      assertTrue(prefs.loadGatewayCustomHeaders("manual|gateway.example.test|443").isEmpty())
+    }
   }
 
   @Test

@@ -1150,6 +1150,18 @@ class GatewaySession(
           if (ingressAuthorization != null) {
             ingressHeaders = request.headers.names().associateWith { request.header(it).orEmpty() }
           }
+          // A proxy that rejects stored headers may redirect to its login or identity provider.
+          // OkHttp keeps custom headers across hosts, so never carry them past this route.
+          val upgradeClient =
+            if (original.headers.size == 0) {
+              client
+            } else {
+              client
+                .newBuilder()
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .build()
+            }
           // OkHttp can invoke onOpen before newWebSocket returns. Keep publication under the
           // send lock, and reject a retirement that won while this coroutine waited for it.
           var socketToCancel: WebSocket? = null
@@ -1163,7 +1175,7 @@ class GatewaySession(
               }
               val createdSocket =
                 try {
-                  webSocketFactory?.invoke(client, request, listener) ?: client.newWebSocket(request, listener)
+                  webSocketFactory?.invoke(upgradeClient, request, listener) ?: upgradeClient.newWebSocket(request, listener)
                 } catch (error: Throwable) {
                   synchronized(lifecycleLock) {
                     socketCreationPending = false

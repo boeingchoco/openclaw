@@ -18,6 +18,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
@@ -207,6 +208,42 @@ class GatewaySettingsScreenTest {
       assertEquals("Editing is not persistence", "127.0.0.1", prefs.manualHost.value)
       assertEquals(18789, prefs.manualPort.value)
     }
+  }
+
+  @Test
+  fun secureManualGatewayMergesMaskedProxyHeadersWhenConnecting() {
+    showGateway()
+    val stableId = "manual|gateway.example|443"
+    val saved = mapOf("CF-Access-Client-Id" to "saved-id", "CF-Access-Client-Secret" to "expired-secret")
+    prefs.saveGatewayCustomHeaders(stableId, saved)
+    openManualSettings()
+    composeRule.onNodeWithText("Unencrypted").performScrollTo().performClick()
+    composeRule.onNodeWithContentDescription("Header name").assertDoesNotExist()
+    composeRule.onNode(hasSetTextAction() and hasText("127.0.0.1")).performScrollTo().performTextReplacement("gateway.example")
+    composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement("443")
+
+    val name = composeRule.onNodeWithContentDescription("Header name")
+    val value = composeRule.onNodeWithContentDescription("Header value")
+    val add = composeRule.onNodeWithText("Add header")
+    name.performScrollTo().performTextReplacement("Host")
+    value.performScrollTo().performTextReplacement("smuggled.example")
+    composeRule.onNodeWithText("This header is set by the connection itself.").performScrollTo().assertIsDisplayed()
+    add.performScrollTo().assertIsNotEnabled()
+
+    name.performScrollTo().performTextReplacement("cf-access-client-secret")
+    value.performScrollTo().performTextReplacement("rotated-secret")
+    value.assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
+    add.performScrollTo().performClick()
+    composeRule.onNodeWithText("cf-access-client-secret").assertIsDisplayed()
+    // A complete header that was typed but never added still belongs to this connect.
+    name.performScrollTo().performTextReplacement("X-Proxy-Tenant")
+    value.performScrollTo().performTextReplacement("synthetic-tenant")
+    capture("manual-gateway-custom-headers")
+    composeRule.runOnIdle { assertEquals("Editing is not persistence", saved, prefs.loadGatewayCustomHeaders(stableId)) }
+
+    composeRule.onNodeWithText("Save & Connect").performScrollTo().performClick()
+    val expected = mapOf("CF-Access-Client-Id" to "saved-id", "cf-access-client-secret" to "rotated-secret", "X-Proxy-Tenant" to "synthetic-tenant")
+    composeRule.waitUntil(timeoutMillis = 10_000) { prefs.loadGatewayCustomHeaders(stableId) == expected }
   }
 
   @Test

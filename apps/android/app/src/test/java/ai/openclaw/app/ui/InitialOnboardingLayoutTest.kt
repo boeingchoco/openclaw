@@ -57,6 +57,7 @@ import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -154,6 +155,32 @@ class InitialOnboardingLayoutTest {
       composeRule.onNodeWithText("Scan QR or setup code").performClick()
       composeRule.onNodeWithText("Enter setup code").performClick()
       assertInputPresentation("Paste setup code", "synthetic-setup-code", secret = true)
+    }
+  }
+
+  @Test
+  fun secureManualSetupStoresMaskedProxyHeadersWhenConnecting() {
+    val prefs = onboardingPrefs()
+    withOnboarding(prefs = prefs) { _, _ ->
+      composeRule.onNodeWithText("Continue").performClick()
+      composeRule.onNodeWithText("Set up manually").performClick()
+      composeRule.onNodeWithContentDescription("Header name").assertDoesNotExist()
+      composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("gateway.example")
+      composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement("443")
+
+      val list = composeRule.onNode(hasScrollAction())
+      list.performScrollToNode(hasContentDescription("Header name"))
+      composeRule.onNodeWithContentDescription("Header name").performTextReplacement("CF-Access-Client-Id")
+      list.performScrollToNode(hasContentDescription("Header value"))
+      assertInputPresentation("Header value", "synthetic-client-id", secret = true)
+      list.performScrollToNode(hasText("Add header"))
+      composeRule.onNodeWithText("Add header").performClick()
+      composeRule.onNodeWithText("CF-Access-Client-Id").assertExists()
+
+      composeRule.onNodeWithText("Test connection").performClick()
+      composeRule.waitUntil(timeoutMillis = 10_000) {
+        prefs.loadGatewayCustomHeaders("manual|gateway.example|443") == mapOf("CF-Access-Client-Id" to "synthetic-client-id")
+      }
     }
   }
 
@@ -595,10 +622,10 @@ class InitialOnboardingLayoutTest {
     fontScale: Float = 1f,
     viewportWidth: Dp = 360.dp,
     permissionsStep: Boolean = false,
+    prefs: SecurePrefs = onboardingPrefs(),
     verify: (MainViewModel, ComponentActivity) -> Unit,
   ) {
     val app = ApplicationProvider.getApplicationContext<NodeApp>()
-    val prefs = SecurePrefs(app, app.getSharedPreferences("onboarding-input-${UUID.randomUUID()}", Context.MODE_PRIVATE))
     val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     val models = ViewModelStore()
     val registry = mutableStateOf(SaveableStateRegistry(null) { true })
@@ -1058,6 +1085,11 @@ class InitialOnboardingLayoutTest {
     assertTrue("$label should stay inside the viewport's top edge", child.top >= parent.top)
     assertTrue("$label should stay inside the viewport's right edge", child.right <= parent.right)
     assertTrue("$label should stay inside the viewport's bottom edge", child.bottom <= parent.bottom)
+  }
+
+  private fun onboardingPrefs(): SecurePrefs {
+    val app = ApplicationProvider.getApplicationContext<NodeApp>()
+    return SecurePrefs(app, app.getSharedPreferences("onboarding-input-${UUID.randomUUID()}", Context.MODE_PRIVATE))
   }
 
   private fun assertInputPresentation(

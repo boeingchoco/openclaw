@@ -245,6 +245,12 @@ the WebSocket upgrade. Configure `gateway.remote.edgeAuth` as described in
 
 **Nodes.** Follow the choice made in step 4.
 
+**Android app.** Like a node, the app passes Access with the service token from step 4. Set up
+the Gateway manually with **Secure (TLS)** and add `CF-Access-Client-Id` and
+`CF-Access-Client-Secret` under **Custom headers**. The headers only get the app through
+Access; the Gateway still authenticates the app with its own token, password, or pairing. See
+[Android](/platforms/android).
+
 ## Verify
 
 ```bash

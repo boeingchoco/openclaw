@@ -855,6 +855,13 @@ class MainViewModel internal constructor(
             password = config.password,
           )
         }
+        // Saved before the first upgrade so a proxy-gated gateway is reachable on this attempt; cleartext
+        // routes never send proxy headers. Case-insensitive merging lets one rotated header replace only itself.
+        if (config.tls && plan.customHeaders.isNotEmpty()) {
+          val replaced = plan.customHeaders.keys.mapTo(HashSet()) { it.lowercase() }
+          val kept = prefs.loadGatewayCustomHeaders(endpoint.stableId).filterKeys { it.lowercase() !in replaced }
+          prefs.saveGatewayCustomHeaders(endpoint.stableId, kept + plan.customHeaders)
+        }
         prefs.gatewayRegistry.upsert(
           GatewayRegistryEntry(
             stableId = endpoint.stableId,

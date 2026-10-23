@@ -739,6 +739,49 @@ class GatewaySessionCustomHeadersTest {
       }
     }
 
+  @Test
+  fun proxyHeaderUpgradeNeverFollowsARedirectToAnotherHost() =
+    runBlocking {
+      val proxy = MockWebServer()
+      val login = MockWebServer()
+      proxy.start()
+      login.start()
+      proxy.enqueue(MockResponse().setResponseCode(302).setHeader("Location", login.url("/cdn-cgi/access/login")))
+      // A followed redirect must fail the assertions below rather than block on an empty queue.
+      login.enqueue(MockResponse().setResponseCode(200))
+      val captured = CompletableDeferred<Pair<OkHttpClient, Request>>()
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val session =
+        GatewaySession(
+          scope = scope,
+          identityStore = testDeviceIdentityStore(RuntimeEnvironment.getApplication()),
+          deviceAuthStore = NoopDeviceAuthStore(),
+          onConnected = {},
+          onDisconnected = {},
+          onEvent = { _, _ -> },
+          customHeadersProvider = { mapOf("CF-Access-Client-Secret" to "synthetic-secret") },
+          webSocketFactory = { client, request, listener ->
+            captured.complete(client to request)
+            closingSocket(request, listener)
+          },
+        )
+      try {
+        connectIngressSession(session)
+        val (client, upgrade) = withTimeout(TEST_TIMEOUT_MS) { captured.await() }
+        assertEquals("synthetic-secret", upgrade.header("CF-Access-Client-Secret"))
+        // The upgrade's own client, replayed against loopback HTTP: a rejected token must stop at the proxy.
+        val replay = upgrade.newBuilder().url(proxy.url("/")).build()
+        client.newCall(replay).execute().use { assertEquals(302, it.code) }
+        assertEquals("synthetic-secret", proxy.takeRequest().getHeader("CF-Access-Client-Secret"))
+        assertEquals(0, login.requestCount)
+      } finally {
+        session.disconnectAndJoin()
+        scope.cancel()
+        proxy.shutdown()
+        login.shutdown()
+      }
+    }
+
   private fun sourceFaviconTls(): Pair<SSLSocketFactory, String> {
     val keyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
     val algorithm = AlgorithmIdentifier(PKCSObjectIdentifiers.sha256WithRSAEncryption, DERNull.INSTANCE)
@@ -1268,24 +1311,7 @@ class GatewaySessionCustomHeadersTest {
       val session =
         ingressSession(scope, authorization, socketFactory = { client, request, listener ->
           captured.complete(client)
-          object : WebSocket {
-            override fun request() = request
-
-            override fun queueSize() = 0L
-
-            override fun send(text: String) = false
-
-            override fun send(bytes: ByteString) = false
-
-            override fun close(
-              code: Int,
-              reason: String?,
-            ) = true
-
-            override fun cancel() {
-              listener.onFailure(this, IOException("fixture closed"), null)
-            }
-          }
+          closingSocket(request, listener)
         })
       try {
         connectIngressSession(session)
@@ -1342,6 +1368,30 @@ class GatewaySessionCustomHeadersTest {
         scope.cancel()
         source.shutdown()
         foreign.shutdown()
+      }
+    }
+
+  /** A socket that never opens; cancelling it reports the failure a real transport would. */
+  private fun closingSocket(
+    request: Request,
+    listener: WebSocketListener,
+  ): WebSocket =
+    object : WebSocket {
+      override fun request() = request
+
+      override fun queueSize() = 0L
+
+      override fun send(text: String) = false
+
+      override fun send(bytes: ByteString) = false
+
+      override fun close(
+        code: Int,
+        reason: String?,
+      ) = true
+
+      override fun cancel() {
+        listener.onFailure(this, IOException("fixture closed"), null)
       }
     }
 

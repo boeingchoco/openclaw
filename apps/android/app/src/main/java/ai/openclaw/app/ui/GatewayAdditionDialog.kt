@@ -81,6 +81,7 @@ internal fun GatewayAdditionDialog(
   var address by remember(request) { mutableStateOf("") }
   var token by remember(request) { mutableStateOf("") }
   var password by remember(request) { mutableStateOf("") }
+  val customHeaders = remember(request) { GatewayCustomHeadersInput() }
   var cameraAllowed by remember {
     mutableStateOf(context.hasPermission(Manifest.permission.CAMERA))
   }
@@ -116,6 +117,7 @@ internal fun GatewayAdditionDialog(
       setupCode = ""
       token = ""
       password = ""
+      customHeaders.clear()
       step = GatewayAdditionStep.Scan
     }
   }
@@ -275,6 +277,9 @@ internal fun GatewayAdditionDialog(
               label = nativeString("Password (optional)"),
               secret = true,
             )
+            if (composeGatewayManualUrl(address, "", true)?.let(::parseGatewayEndpoint)?.tls == true) {
+              GatewayCustomHeadersEditor(customHeaders)
+            }
             current.error?.let { Text(it, color = ClawTheme.colors.warning) }
             ClawPrimaryButton(text = nativeString("Continue"), onClick = ::stageManual, modifier = Modifier.fillMaxWidth())
           }
@@ -291,7 +296,11 @@ internal fun GatewayAdditionDialog(
             ClawPrimaryButton(
               text = nativeString("Connect"),
               enabled = !handoff.pending,
-              onClick = { if (isCurrent()) viewModel.saveGatewayConfigAndConnect(GatewayConnectPlan(config, GatewaySavedAuthAction.REPLACE_SETUP), request) },
+              onClick = {
+                // Headers belong to the address typed beside them, never to a scanned setup code.
+                val headers = if (current.previous is GatewayAdditionStep.Manual) customHeaders.forConnect() else emptyMap()
+                if (isCurrent()) viewModel.saveGatewayConfigAndConnect(GatewayConnectPlan(config, GatewaySavedAuthAction.REPLACE_SETUP, headers), request)
+              },
               modifier = Modifier.fillMaxWidth().testTag("gateway-add-connect"),
             )
           }

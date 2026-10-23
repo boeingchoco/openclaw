@@ -383,6 +383,8 @@ fun OnboardingFlow(
     var manualTls by rememberSaveable { mutableStateOf(false) }
     var token by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
+    // Proxy header values are credentials; keep them out of saved instance state.
+    val customHeaders = remember { GatewayCustomHeadersInput() }
     var setupErrorCode by rememberSaveable(stateSaver = OnboardingErrorCodeSaver) { mutableStateOf(OnboardingErrorCode.None) }
     var setupScanErrorCode by rememberSaveable(stateSaver = OnboardingErrorCodeSaver) { mutableStateOf(OnboardingErrorCode.None) }
     var attemptedGatewayName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -694,7 +696,7 @@ fun OnboardingFlow(
           bootstrapTokenInput = "",
           tokenInput = token,
           passwordInput = password,
-        )
+        )?.copy(customHeaders = customHeaders.forConnect())
       if (plan == null) {
         val endpointError =
           composeGatewayManualUrl(manualHost, manualPort, transport.effectiveTls)
@@ -795,6 +797,7 @@ fun OnboardingFlow(
               manualHost = nearbyGateway.host
               manualPort = nearbyGatewayManualPort(nearbyGateway)
               manualTls = nearbyGatewayManualTls(nearbyGateway)
+              customHeaders.clear()
               attemptedGatewayName = nearbyGateway.name
             }
             step = OnboardingStep.Manual
@@ -860,6 +863,7 @@ fun OnboardingFlow(
           manualTls = manualTls,
           token = token,
           password = password,
+          customHeaders = customHeaders,
           error = setupErrorCode.nativeTextOrNull()?.resolveNativeTextResource(),
           mascotMood = onboardingMascotMood(step = step, setupErrorCode = setupErrorCode),
           onBack = ::goBack,
@@ -1647,6 +1651,7 @@ private fun ManualGatewaySetupScreen(
   manualTls: Boolean,
   token: String,
   password: String,
+  customHeaders: GatewayCustomHeadersInput,
   error: String?,
   mascotMood: MascotMood,
   onBack: () -> Unit,
@@ -1734,6 +1739,11 @@ private fun ManualGatewaySetupScreen(
                 color = ClawTheme.colors.textMuted,
               )
             }
+          }
+        }
+        if (transport.effectiveTls) {
+          item {
+            GatewayCustomHeadersEditor(customHeaders)
           }
         }
         error?.let { message ->
