@@ -253,6 +253,33 @@ class GatewaySettingsScreenTest {
   }
 
   @Test
+  fun secureManualGatewayKeepsTypedHeadersWhenThePortIsCorrected() {
+    showGateway()
+    openManualSettings()
+    val expected = mapOf("CF-Access-Client-Id" to "synthetic-client-id", "CF-Access-Client-Secret" to "synthetic-client-secret")
+    composeRule.onNode(hasSetTextAction() and hasText("127.0.0.1")).performScrollTo().performTextReplacement("gateway.example")
+    val name = composeRule.onNodeWithContentDescription("Header name")
+    val value = composeRule.onNodeWithContentDescription("Header value")
+    name.performScrollTo().performTextReplacement("CF-Access-Client-Id")
+    value.performScrollTo().performTextReplacement("synthetic-client-id")
+    composeRule.onNodeWithText("Add header").performScrollTo().performClick()
+    name.performScrollTo().performTextReplacement("CF-Access-Client-Secret")
+    value.performScrollTo().performTextReplacement("synthetic-client-secret")
+    // The default port is wrong for a Cloudflare hostname; this attempt saves the address and headers under it.
+    composeRule.onNodeWithText("Save & Connect").performScrollTo().performClick()
+    composeRule.waitUntil(timeoutMillis = 10_000) { prefs.loadGatewayCustomHeaders("manual|gateway.example|18789") == expected }
+
+    composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement("443")
+    composeRule.onNodeWithText("Save & Connect").performScrollTo().performClick()
+    composeRule.waitUntil(timeoutMillis = 10_000) { prefs.loadGatewayCustomHeaders("manual|gateway.example|443") == expected }
+
+    // An address saved from elsewhere, such as a setup code, must not inherit these rows.
+    composeRule.runOnIdle { prefs.setManualHost("other.example") }
+    composeRule.onNode(hasSetTextAction() and hasText("other.example")).performScrollTo()
+    composeRule.onAllNodes(hasContentDescription("Remove header CF-Access-Client-Secret")).assertCountEquals(0)
+  }
+
+  @Test
   fun savedProxyHeadersListNamesOnlyAndRemoveOneAfterConfirmation() {
     showGateway()
     val stableId = "manual|gateway.example|443"

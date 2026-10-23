@@ -740,44 +740,130 @@ class GatewaySessionCustomHeadersTest {
     }
 
   @Test
-  fun proxyHeaderUpgradeNeverFollowsARedirectToAnotherHost() =
+  fun proxyHeadersStopAtTheGatewayWhenItRedirects() =
     runBlocking {
-      val proxy = MockWebServer()
-      val login = MockWebServer()
-      proxy.start()
-      login.start()
-      proxy.enqueue(MockResponse().setResponseCode(302).setHeader("Location", login.url("/cdn-cgi/access/login")))
-      // A followed redirect must fail the assertions below rather than block on an empty queue.
-      login.enqueue(MockResponse().setResponseCode(200))
-      val captured = CompletableDeferred<Pair<OkHttpClient, Request>>()
+      val tls = sourceFaviconTls()
+      val headers = mapOf("CF-Access-Client-Id" to "synthetic-client-id", "CF-Access-Client-Secret" to "synthetic-client-secret")
+      val imagePath = "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full?mediaTicket=image-ticket"
+      val videoPath = "/api/chat/media/outgoing/main/22222222-2222-4222-8222-222222222222/full?mediaTicket=video-ticket"
+      // Stands in for the proxy's login host: any request here carried the headers past the gateway.
+      // It serves the pinned certificate too, so a followed https redirect would reach it.
+      val login =
+        MockWebServer().apply {
+          useHttps(tls.first, false)
+          dispatcher =
+            object : Dispatcher() {
+              override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(200)
+            }
+          start()
+        }
+      val upgrades = AtomicInteger()
+      val gatewayRequests = ConcurrentLinkedQueue<RecordedRequest>()
+      val gateway =
+        MockWebServer().apply {
+          useHttps(tls.first, false)
+          dispatcher =
+            object : Dispatcher() {
+              override fun dispatch(request: RecordedRequest): MockResponse {
+                gatewayRequests.add(request)
+                val redirect = MockResponse().setResponseCode(302).setHeader("Location", login.url("/cdn-cgi/access/login"))
+                // Media routes and the first upgrade answer the way Access answers a rejected token.
+                if (request.path != "/" || upgrades.incrementAndGet() == 1) return redirect
+                return MockResponse().withWebSocketUpgrade(
+                  object : WebSocketListener() {
+                    override fun onOpen(
+                      webSocket: WebSocket,
+                      response: Response,
+                    ) {
+                      webSocket.send(CONNECT_CHALLENGE_FRAME)
+                    }
+
+                    override fun onMessage(
+                      webSocket: WebSocket,
+                      text: String,
+                    ) {
+                      val frame = Json.parseToJsonElement(text).jsonObject
+                      val id = frame["id"]?.jsonPrimitive?.content ?: return
+                      when (frame["method"]?.jsonPrimitive?.content) {
+                        "connect" -> {
+                          webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""")
+                        }
+
+                        "artifacts.download" -> {
+                          val type =
+                            frame
+                              .getValue("params")
+                              .jsonObject
+                              .getValue("artifactId")
+                              .jsonPrimitive.content
+                          val (mimeType, path) = if (type == "video") "video/mp4" to videoPath else "image/png" to imagePath
+                          webSocket.send(
+                            """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"$type","type":"$type","mimeType":"$mimeType","download":{"mode":"url"}},"url":"$path"}}""",
+                          )
+                        }
+                      }
+                    }
+                  },
+                )
+              }
+            }
+          start()
+        }
+      val connected = CompletableDeferred<Unit>()
       val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port, tlsEnabled = true)
       val session =
         GatewaySession(
           scope = scope,
           identityStore = testDeviceIdentityStore(RuntimeEnvironment.getApplication()),
           deviceAuthStore = NoopDeviceAuthStore(),
-          onConnected = {},
+          onConnected = { connected.complete(Unit) },
           onDisconnected = {},
           onEvent = { _, _ -> },
-          customHeadersProvider = { mapOf("CF-Access-Client-Secret" to "synthetic-secret") },
-          webSocketFactory = { client, request, listener ->
-            captured.complete(client to request)
-            closingSocket(request, listener)
-          },
+          customHeadersProvider = { headers },
         )
       try {
-        connectIngressSession(session)
-        val (client, upgrade) = withTimeout(TEST_TIMEOUT_MS) { captured.await() }
-        assertEquals("synthetic-secret", upgrade.header("CF-Access-Client-Secret"))
-        // The upgrade's own client, replayed against loopback HTTP: a rejected token must stop at the proxy.
-        val replay = upgrade.newBuilder().url(proxy.url("/")).build()
-        client.newCall(replay).execute().use { assertEquals(302, it.code) }
-        assertEquals("synthetic-secret", proxy.takeRequest().getHeader("CF-Access-Client-Secret"))
+        session.connect(
+          endpoint = endpoint,
+          token = "shared-token",
+          bootstrapToken = null,
+          password = null,
+          tls = GatewayTlsParams(expectedFingerprint = tls.second),
+          options =
+            GatewayConnectOptions(
+              role = "operator",
+              scopes = listOf("operator.read"),
+              caps = emptyList(),
+              commands = emptyList(),
+              permissions = emptyMap(),
+              client = GatewayClientInfo("openclaw-android-test", "Android Test", "1.0.0-test", "android", "ui", "media-test", "android", "test"),
+            ),
+        )
+        // Connecting needs a second upgrade, so the redirected first attempt has finished.
+        withTimeout(TEST_TIMEOUT_MS) { connected.await() }
+        assertEquals(2, upgrades.get())
+
+        assertNull(session.loadMediaArtifact(endpoint.stableId, "main", null, "image", GatewayMediaKind.Image))
+        val video = session.loadMediaArtifact(endpoint.stableId, "main", null, "video", GatewayMediaKind.Video) as GatewayLoadedMedia.Streaming
+        // Media3 streams through OkHttpDataSource with exactly this client and these default headers.
+        val stream =
+          Request
+            .Builder()
+            .url(video.url)
+            .apply { video.headers.forEach { (name, value) -> header(name, value) } }
+            .build()
+        video.client
+          .newCall(stream)
+          .execute()
+          .use { assertEquals(302, it.code) }
+
+        assertEquals(listOf("/", "/", imagePath, videoPath), gatewayRequests.map { it.path })
+        assertTrue(gatewayRequests.all { it.getHeader("CF-Access-Client-Secret") == "synthetic-client-secret" })
         assertEquals(0, login.requestCount)
       } finally {
         session.disconnectAndJoin()
         scope.cancel()
-        proxy.shutdown()
+        gateway.shutdown()
         login.shutdown()
       }
     }

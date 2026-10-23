@@ -1526,8 +1526,13 @@ private fun GatewaySettingsScreen(
   var tokenInput by remember { mutableStateOf("") }
   var bootstrapTokenInput by remember { mutableStateOf("") }
   var passwordInput by remember { mutableStateOf("") }
-  // Headers belong to the address beside them; a connect that replaces that address clears them.
-  val customHeadersInput = remember(manualHost, manualPort, manualTls) { GatewayCustomHeadersInput() }
+  // A connect from this form saves its address before the attempt finishes, so typed headers outlive
+  // it and a corrected port keeps them. An address saved from elsewhere, such as a setup code, clears them.
+  val customHeadersInput = remember { GatewayCustomHeadersInput() }
+  var submittedManualAddress by remember { mutableStateOf<Triple<String, Int, Boolean>?>(null) }
+  LaunchedEffect(manualHost, manualPort, manualTls) {
+    if (Triple(manualHost, manualPort, manualTls) != submittedManualAddress) customHeadersInput.clear()
+  }
   var setupValidationText by remember { mutableStateOf<String?>(null) }
   var manualValidationText by remember { mutableStateOf<String?>(null) }
   var showDiagnostics by rememberSaveable { mutableStateOf(false) }
@@ -1688,6 +1693,7 @@ private fun GatewaySettingsScreen(
       if (useSetupCode) setupValidationText = message else manualValidationText = message
       return
     }
+    if (!useSetupCode) submittedManualAddress = Triple(plan.config.host, plan.config.port, plan.config.tls)
     if (plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_SETUP) {
       pendingSetupResetPlan = plan
     } else {
