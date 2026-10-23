@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.MainViewModel.GatewayAdditionRequest
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.formatGatewayAuthority
 import ai.openclaw.app.hasPermission
 import ai.openclaw.app.i18n.nativeString
@@ -180,6 +181,11 @@ internal fun GatewayAdditionDialog(
       step = GatewayAdditionStep.Manual(nativeString("Use Enter setup code to paste a setup code."))
       return
     }
+    // A credential typed as a header name stays on this step, where its warning is visible.
+    if (newHeaderTarget(address, gateways) != null && customHeaders.blocksConnect) {
+      step = GatewayAdditionStep.Manual(nativeString("Fix the custom header above before connecting."))
+      return
+    }
     val config = resolveGatewayConnectConfig(false, "", address, "", true, "", token, password)
     step =
       if (config != null) {
@@ -277,8 +283,13 @@ internal fun GatewayAdditionDialog(
               label = nativeString("Password (optional)"),
               secret = true,
             )
-            if (composeGatewayManualUrl(address, "", true)?.let(::parseGatewayEndpoint)?.tls == true) {
-              GatewayCustomHeadersEditor(customHeaders)
+            val headerTarget = resolveGatewayHeaderTarget(address, "", effectiveTls = true)
+            if (headerTarget != null && gateways.any { it.stableId == headerTarget.stableId }) {
+              // Connecting selects a saved gateway without applying typed headers.
+              Text(nativeString("Already saved. Your saved connection settings will be used."), style = ClawTheme.type.caption)
+              Text(nativeString("To change its custom headers, use Manual Gateway in Settings."), style = ClawTheme.type.caption)
+            } else if (headerTarget != null) {
+              GatewayCustomHeadersEditor(customHeaders, targetStableId = headerTarget.stableId)
             }
             current.error?.let { Text(it, color = ClawTheme.colors.warning) }
             ClawPrimaryButton(text = nativeString("Continue"), onClick = ::stageManual, modifier = Modifier.fillMaxWidth())
@@ -297,8 +308,9 @@ internal fun GatewayAdditionDialog(
               text = nativeString("Connect"),
               enabled = !handoff.pending,
               onClick = {
-                // Headers belong to the address typed beside them, never to a scanned setup code.
-                val headers = if (current.previous is GatewayAdditionStep.Manual) customHeaders.forConnect() else emptyMap()
+                // Headers belong to the address typed beside them, never to a scanned setup code or a saved gateway.
+                val headerTarget = newHeaderTarget(address, gateways).takeIf { current.previous is GatewayAdditionStep.Manual }
+                val headers = headerTarget?.let { customHeaders.forConnect(it.stableId) }.orEmpty()
                 if (isCurrent()) viewModel.saveGatewayConfigAndConnect(GatewayConnectPlan(config, GatewaySavedAuthAction.REPLACE_SETUP, headers), request)
               },
               modifier = Modifier.fillMaxWidth().testTag("gateway-add-connect"),
@@ -310,3 +322,9 @@ internal fun GatewayAdditionDialog(
     }
   }
 }
+
+/** The header target of a typed address that is not saved yet; saved gateways keep their own headers. */
+private fun newHeaderTarget(
+  address: String,
+  gateways: List<GatewayRegistryEntry>,
+): GatewayHeaderTarget? = resolveGatewayHeaderTarget(address, "", effectiveTls = true)?.takeIf { target -> gateways.none { it.stableId == target.stableId } }

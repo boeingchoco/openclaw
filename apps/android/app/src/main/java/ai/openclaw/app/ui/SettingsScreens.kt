@@ -1545,11 +1545,14 @@ private fun GatewaySettingsScreen(
         requestedTls = tlsInput,
       )
     }
+  val customHeadersTarget =
+    remember(hostInput, portInput, transport.effectiveTls) { resolveGatewayHeaderTarget(hostInput, portInput, transport.effectiveTls) }
+  val savedCustomHeaders = rememberSavedCustomHeaders(viewModel, customHeadersTarget)
 
   fun saveAndConnect(plan: GatewayConnectPlan) {
     setupValidationText = null
     manualValidationText = null
-    viewModel.saveGatewayConfigAndConnect(plan)
+    viewModel.saveGatewayConfigAndConnect(plan, onCustomHeadersSaved = { stableId -> customHeadersInput.markSaved(stableId, plan.customHeaders) })
   }
 
   pendingSetupResetPlan?.let { plan ->
@@ -1661,6 +1664,11 @@ private fun GatewaySettingsScreen(
   LaunchedEffect(Unit) { viewModel.startGatewayDiscovery() }
 
   fun connectGateway(useSetupCode: Boolean) {
+    // A credential typed as a header name keeps the form open with its warning.
+    if (!useSetupCode && transport.effectiveTls && customHeadersInput.blocksConnect) {
+      manualValidationText = nativeString("Fix the custom header above before connecting.")
+      return
+    }
     val plan =
       resolveGatewayConnectPlan(
         useSetupCode = useSetupCode,
@@ -1674,7 +1682,7 @@ private fun GatewaySettingsScreen(
         tokenInput = if (useSetupCode) "" else tokenInput,
         bootstrapTokenInput = if (useSetupCode) "" else bootstrapTokenInput,
         passwordInput = if (useSetupCode) "" else passwordInput,
-      )?.let { if (useSetupCode) it else it.copy(customHeaders = customHeadersInput.forConnect()) }
+      )?.let { if (useSetupCode) it else it.copy(customHeaders = customHeadersInput.forConnect(customHeadersTarget?.stableId)) }
     if (plan == null) {
       val message = nativeString("Enter a valid setup code or gateway address.")
       if (useSetupCode) setupValidationText = message else manualValidationText = message
@@ -1958,7 +1966,7 @@ private fun GatewaySettingsScreen(
           secret = true,
         )
         if (transport.effectiveTls) {
-          GatewayCustomHeadersEditor(customHeadersInput)
+          GatewayCustomHeadersEditor(customHeadersInput, targetStableId = customHeadersTarget?.stableId, saved = savedCustomHeaders)
         }
         manualValidationText?.let {
           Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)

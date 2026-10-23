@@ -599,6 +599,38 @@ class SidebarGatewayPickerTest {
   }
 
   @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun manualGatewayAdditionLeavesSavedAddressHeadersToManualGateway() {
+    val gateway = savedGateway("Local QA Gateway")
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry("manual|gateway.example.test|443", GatewayRegistryEntryKind.MANUAL, "Proxy QA Gateway", "gateway.example.test", 443, true),
+    )
+    focus(gateway)
+    showSidebarAndComposer(showShell = true)
+    composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
+    openPicker()
+    composeRule.onNodeWithText("Add Gateway").performClick()
+    composeRule.onNodeWithText("Set up manually").performScrollTo().performClick()
+    val address = composeRule.onNodeWithContentDescription("Gateway URL")
+
+    // Connecting to a saved address selects it without applying typed headers, so none are offered.
+    address.performScrollTo().performTextReplacement("wss://gateway.example.test")
+    composeRule.onNodeWithText("To change its custom headers, use Manual Gateway in Settings.").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithContentDescription("Header name").assertDoesNotExist()
+
+    address.performScrollTo().performTextReplacement("wss://new.example.test")
+    composeRule.onNodeWithContentDescription("Header name").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithText("To change its custom headers, use Manual Gateway in Settings.").assertDoesNotExist()
+
+    // A Client ID typed as the name keeps the dialog on this step instead of reviewing the connect.
+    composeRule.onNodeWithContentDescription("Header name").performScrollTo().performTextReplacement("0123456789abcdef0123456789abcdef.access")
+    composeRule.onNodeWithContentDescription("Header value").performScrollTo().performTextReplacement("synthetic-secret")
+    composeRule.onNodeWithText("Continue").performScrollTo().performClick()
+    composeRule.onNodeWithText("Fix the custom header above before connecting.").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithTag("gateway-add-preview").assertDoesNotExist()
+  }
+
+  @Test
   fun emptyRegistryOffersCancellableGatewayAddition() {
     prefs.gatewayRegistry.entries.value
       .forEach { prefs.gatewayRegistry.remove(it.stableId) }

@@ -52,6 +52,28 @@ object GatewayCustomHeaders {
     return result
   }
 
+  enum class CredentialShape { CLIENT_ID, SECRET }
+
+  // Cloudflare Access service token values. Secrets are 64 hex characters, or cfast_ for tokens
+  // created since 2026-08-26.
+  private val clientIdName = Regex("[0-9a-f]{32}\\.access", RegexOption.IGNORE_CASE)
+  private val legacySecretName = Regex("[0-9a-f]{64}", RegexOption.IGNORE_CASE)
+
+  /**
+   * Recognizes a credential typed where a header name belongs. Such names pass [rejection] and
+   * would be stored and shown unmasked, so editors refuse them while [sanitized] keeps existing
+   * entries visible for removal.
+   */
+  fun credentialShape(name: String): CredentialShape? {
+    // Quotes, backticks, and sentence periods copied with a token are legal name characters.
+    val trimmed = name.trim().trim { it in TOKEN_PUNCTUATION }
+    return when {
+      clientIdName.matches(trimmed) -> CredentialShape.CLIENT_ID
+      legacySecretName.matches(trimmed) || trimmed.startsWith("cfast_", ignoreCase = true) -> CredentialShape.SECRET
+      else -> null
+    }
+  }
+
   private fun isTokenCharacter(character: Char): Boolean =
     character in '0'..'9' ||
       character in 'A'..'Z' ||
