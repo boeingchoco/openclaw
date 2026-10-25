@@ -1,7 +1,7 @@
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   prepareSimilarityText,
-  preparedTextSimilarity,
+  similarityFromSharedTokens,
   type PreparedSimilarityText,
 } from "./tokenize.js";
 
@@ -18,6 +18,8 @@ type PreparedMMRItem<T extends MMRItem> = {
   item: T;
   score: number;
   text: PreparedSimilarityText;
+  // Call-local ids for text.tokens, so overlap counts read an array instead of hashing strings.
+  tokenIds: number[];
   relevance: number;
   maxSimilarity: number;
 };
@@ -33,16 +35,28 @@ export function applyMMRToHybridResults<T extends MMRItem>(items: T[], lambda: n
     return items.toSorted((a, b) => b.score - a.score);
   }
   const prepared: PreparedMMRItem<T>[] = [];
+  const tokenIdByToken = new Map<string, number>();
   let maxScore = -Infinity;
   let minScore = Infinity;
   for (const item of items) {
     const score = item.score;
     maxScore = Math.max(maxScore, score);
     minScore = Math.min(minScore, score);
+    const text = prepareSimilarityText(item.snippet);
+    const tokenIds: number[] = [];
+    for (const token of text.tokens) {
+      let id = tokenIdByToken.get(token);
+      if (id === undefined) {
+        id = tokenIdByToken.size;
+        tokenIdByToken.set(token, id);
+      }
+      tokenIds.push(id);
+    }
     prepared.push({
       item,
       score,
-      text: prepareSimilarityText(item.snippet),
+      text,
+      tokenIds,
       relevance: 0,
       maxSimilarity: 0,
     });
@@ -54,14 +68,29 @@ export function applyMMRToHybridResults<T extends MMRItem>(items: T[], lambda: n
   const remaining = new Set(prepared);
   const selected: T[] = [];
   let previous: PreparedMMRItem<T> | undefined;
+  // A token belongs to the previous selection when its entry equals the current round.
+  const previousTokenRound = new Uint32Array(tokenIdByToken.size);
+  let round = 0;
   while (remaining.size > 0) {
+    if (previous) {
+      round++;
+      for (const id of previous.tokenIds) {
+        previousTokenRound[id] = round;
+      }
+    }
     let bestItem: PreparedMMRItem<T> | null = null;
     let bestMMRScore = -Infinity;
     for (const candidate of remaining) {
       // Apply the previous selection's penalty before ranking, in the same pass.
       // Jaccard similarity cannot exceed 1, so saturated maxima need no update.
       if (previous && candidate.maxSimilarity !== 1) {
-        const similarity = preparedTextSimilarity(candidate.text, previous.text);
+        let sharedTokens = 0;
+        for (const id of candidate.tokenIds) {
+          if (previousTokenRound[id] === round) {
+            sharedTokens++;
+          }
+        }
+        const similarity = similarityFromSharedTokens(candidate.text, previous.text, sharedTokens);
         if (similarity > candidate.maxSimilarity) {
           candidate.maxSimilarity = similarity;
         }

@@ -1,6 +1,6 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/memory-mmr-measure.ts
 // Run each workload in a fresh process; alternate --owner baseline/candidate externally.
-// --mode counts instruments candidate visits and fixture-token membership; timings use neither hook.
+// --mode counts instruments candidate visits and string lookups of fixture tokens; timings use no hook.
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import os from "node:os";
@@ -107,18 +107,29 @@ const metadata = {
 if (values.mode === "counts") {
   // oxlint-disable-next-line typescript/unbound-method -- Forward the original receiver below.
   const original = Set.prototype.has;
+  // oxlint-disable-next-line typescript/unbound-method -- Forward the original receiver below.
+  const originalGet = Map.prototype.get;
   const originalIterator = Set.prototype[Symbol.iterator];
-  let tokenMemberships = 0;
+  let tokenLookups = 0;
   let candidateVisits = 0;
   let result: Awaited<ReturnType<typeof run>>;
+  // Only similarity work looks up these token keys; hybrid range/project keys differ.
+  const isFixtureToken = (value: unknown) =>
+    typeof value === "string" && /^(?:m\d+_\d+|c\d+)$/u.test(value);
   try {
     // oxlint-disable-next-line eslint/no-extend-native -- Count without retaining mock call history; restored in finally.
     Set.prototype.has = function (this: Set<unknown>, value: unknown) {
-      // Only Jaccard sees these token keys; hybrid range/project keys differ.
-      if (typeof value === "string" && /^(?:m\d+_\d+|c\d+)$/u.test(value)) {
-        tokenMemberships++;
+      if (isFixtureToken(value)) {
+        tokenLookups++;
       }
       return original.call(this, value);
+    };
+    // oxlint-disable-next-line eslint/no-extend-native -- Count token interning; restored in finally.
+    Map.prototype.get = function (this: Map<unknown, unknown>, key: unknown) {
+      if (isFixtureToken(key)) {
+        tokenLookups++;
+      }
+      return originalGet.call(this, key);
     };
     // oxlint-disable-next-line eslint/no-extend-native -- Count actual candidate visits without retaining elements; restored in finally.
     Set.prototype[Symbol.iterator] = function* (this: Set<unknown>): SetIterator<unknown> {
@@ -141,6 +152,8 @@ if (values.mode === "counts") {
   } finally {
     // oxlint-disable-next-line eslint/no-extend-native -- Restore the original method after count-only instrumentation.
     Set.prototype.has = original;
+    // oxlint-disable-next-line eslint/no-extend-native -- Restore lookups after count-only instrumentation.
+    Map.prototype.get = originalGet;
     // oxlint-disable-next-line eslint/no-extend-native -- Restore iteration after count-only instrumentation.
     Set.prototype[Symbol.iterator] = originalIterator;
   }
@@ -148,7 +161,7 @@ if (values.mode === "counts") {
     JSON.stringify({
       ...metadata,
       candidateVisits,
-      tokenMemberships,
+      tokenLookups,
       fingerprint: fingerprint(result),
     }),
   );

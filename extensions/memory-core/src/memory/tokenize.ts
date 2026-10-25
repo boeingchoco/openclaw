@@ -25,24 +25,6 @@ function tokenize(text: string): Set<string> {
   return tokens;
 }
 
-function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
-  if (setA.size === 0 && setB.size === 0) {
-    return 1;
-  }
-  let intersectionSize = 0;
-  const smaller = setA.size <= setB.size ? setA : setB;
-  const larger = setA.size <= setB.size ? setB : setA;
-
-  for (const token of smaller) {
-    if (larger.has(token)) {
-      intersectionSize++;
-    }
-  }
-
-  const unionSize = setA.size + setB.size - intersectionSize;
-  return intersectionSize / unionSize;
-}
-
 export type PreparedSimilarityText = {
   tokens: Set<string>;
   // Set only for token-less text, which compares by literal equality.
@@ -58,13 +40,30 @@ export function prepareSimilarityText(text: string): PreparedSimilarityText {
   };
 }
 
-// Distinct text outside the tokenizer's alphabet must not collapse as two empty sets.
 export function preparedTextSimilarity(
   a: PreparedSimilarityText,
   b: PreparedSimilarityText,
 ): number {
+  let sharedTokens = 0;
+  const smaller = a.tokens.size <= b.tokens.size ? a.tokens : b.tokens;
+  const larger = a.tokens.size <= b.tokens.size ? b.tokens : a.tokens;
+  for (const token of smaller) {
+    if (larger.has(token)) {
+      sharedTokens++;
+    }
+  }
+  return similarityFromSharedTokens(a, b, sharedTokens);
+}
+
+// Jaccard similarity for callers that count shared tokens themselves. Distinct
+// text outside the tokenizer's alphabet must not collapse as two empty sets.
+export function similarityFromSharedTokens(
+  a: PreparedSimilarityText,
+  b: PreparedSimilarityText,
+  sharedTokens: number,
+): number {
   if (a.tokens.size === 0 && b.tokens.size === 0) {
     return a.emptyTokenText === b.emptyTokenText ? 1 : 0;
   }
-  return jaccardSimilarity(a.tokens, b.tokens);
+  return sharedTokens / (a.tokens.size + b.tokens.size - sharedTokens);
 }

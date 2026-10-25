@@ -53,6 +53,16 @@ it.each([
     order: [0, 1, 2],
   },
   {
+    name: "penalizes token-less duplicates by literal text",
+    rows: [
+      [1, "🦞🦞"],
+      [0.99, "🦞🦞"],
+      [0.985, "🍣"],
+      [0.9, "x"],
+    ],
+    order: [0, 2, 1, 3],
+  },
+  {
     name: "retains mixed-script memories sharing an ASCII term",
     rows: [
       [1, "server Москва резервная копия"],
