@@ -68,6 +68,10 @@ export function applyMMRToHybridResults<T extends MMRItem>(items: T[], lambda: n
     // A selected item's contribution never changes, so update each candidate's
     // running maximum once per pair instead of rescanning selected items.
     for (const candidate of remaining) {
+      // Jaccard similarity cannot exceed 1, so this maximum cannot increase.
+      if (candidate.maxSimilarity === 1) {
+        continue;
+      }
       const similarity = preparedTextSimilarity(candidate.text, bestItem.text);
       if (similarity > candidate.maxSimilarity) {
         candidate.maxSimilarity = similarity;
