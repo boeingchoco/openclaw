@@ -23,6 +23,17 @@ it("compares token sets and falls back to literal equality for empty token sets"
 
 it.each([
   {
+    name: "updates diversity penalties after every selection",
+    rows: [
+      [1, "alpha beta"],
+      [0.98, "alpha beta"],
+      [0.92, "gamma delta"],
+      [0.91, "gamma delta"],
+      [0.7, "alpha epsilon"],
+    ],
+    order: [0, 2, 1, 3, 4],
+  },
+  {
     name: "diversifies NFC-equivalent kana",
     rows: [
       [1, "が"],

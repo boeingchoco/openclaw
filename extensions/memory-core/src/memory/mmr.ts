@@ -32,25 +32,40 @@ export function applyMMRToHybridResults<T extends MMRItem>(items: T[], lambda: n
   if (lambda === 1) {
     return items.toSorted((a, b) => b.score - a.score);
   }
-  const prepared: PreparedMMRItem<T>[] = items.map((item) => ({
-    item,
-    score: item.score,
-    text: prepareSimilarityText(item.snippet),
-    relevance: 0,
-    maxSimilarity: 0,
-  }));
-  const maxScore = Math.max(...prepared.map((item) => item.score));
-  const minScore = Math.min(...prepared.map((item) => item.score));
+  const prepared: PreparedMMRItem<T>[] = [];
+  let maxScore = -Infinity;
+  let minScore = Infinity;
+  for (const item of items) {
+    const score = item.score;
+    maxScore = Math.max(maxScore, score);
+    minScore = Math.min(minScore, score);
+    prepared.push({
+      item,
+      score,
+      text: prepareSimilarityText(item.snippet),
+      relevance: 0,
+      maxSimilarity: 0,
+    });
+  }
   const scoreRange = maxScore - minScore;
   for (const item of prepared) {
     item.relevance = scoreRange === 0 ? 1 : (item.score - minScore) / scoreRange;
   }
   const remaining = new Set(prepared);
   const selected: T[] = [];
+  let previous: PreparedMMRItem<T> | undefined;
   while (remaining.size > 0) {
     let bestItem: PreparedMMRItem<T> | null = null;
     let bestMMRScore = -Infinity;
     for (const candidate of remaining) {
+      // Apply the previous selection's penalty before ranking, in the same pass.
+      // Jaccard similarity cannot exceed 1, so saturated maxima need no update.
+      if (previous && candidate.maxSimilarity !== 1) {
+        const similarity = preparedTextSimilarity(candidate.text, previous.text);
+        if (similarity > candidate.maxSimilarity) {
+          candidate.maxSimilarity = similarity;
+        }
+      }
       const mmrScore = lambda * candidate.relevance - (1 - lambda) * candidate.maxSimilarity;
       if (
         mmrScore > bestMMRScore ||
@@ -65,18 +80,7 @@ export function applyMMRToHybridResults<T extends MMRItem>(items: T[], lambda: n
     }
     selected.push(bestItem.item);
     remaining.delete(bestItem);
-    // A selected item's contribution never changes, so update each candidate's
-    // running maximum once per pair instead of rescanning selected items.
-    for (const candidate of remaining) {
-      // Jaccard similarity cannot exceed 1, so this maximum cannot increase.
-      if (candidate.maxSimilarity === 1) {
-        continue;
-      }
-      const similarity = preparedTextSimilarity(candidate.text, bestItem.text);
-      if (similarity > candidate.maxSimilarity) {
-        candidate.maxSimilarity = similarity;
-      }
-    }
+    previous = bestItem;
   }
   return selected;
 }

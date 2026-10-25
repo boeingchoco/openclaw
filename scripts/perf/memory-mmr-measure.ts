@@ -1,6 +1,6 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/memory-mmr-measure.ts
 // Run each workload in a fresh process; alternate --owner baseline/candidate externally.
-// --mode counts instruments only fixture-token membership; timings never use that hook.
+// --mode counts instruments candidate visits and fixture-token membership; timings use neither hook.
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import os from "node:os";
@@ -18,7 +18,11 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "10" },
   },
 });
-assert.ok(["duplicate-heavy", "mixed", "distinct"].includes(values.workload));
+assert.ok(
+  ["duplicate-heavy", "mixed", "distinct", "overlapping", "near-duplicate"].includes(
+    values.workload,
+  ),
+);
 assert.ok(["timing", "counts"].includes(values.mode));
 const samples = parseStrictIntegerOption({
   raw: values.samples,
@@ -35,6 +39,8 @@ const warmup = parseStrictIntegerOption({
 const owner: typeof import("../../extensions/memory-core/src/memory/hybrid.js") = await import(
   pathToFileURL(path.resolve(values.owner)).href
 );
+const sharedTokens =
+  values.workload === "overlapping" ? 20 : values.workload === "near-duplicate" ? 79 : 0;
 const rows = Array.from({ length: 400 }, (_row, index) => {
   // Mixed: 300 entries across 10 duplicate groups, plus 100 distinct entries.
   const group =
@@ -43,7 +49,9 @@ const rows = Array.from({ length: 400 }, (_row, index) => {
       : values.workload === "mixed" && index < 300
         ? index % 10
         : index;
-  const snippet = Array.from({ length: 80 }, (_token, token) => `m${group}_${token}`).join(" ");
+  const snippet = Array.from({ length: 80 }, (_token, token) =>
+    token < sharedTokens ? `c${token}` : `m${group}_${token}`,
+  ).join(" ");
   assert.ok(snippet.length <= 700, "Fixture must fit the retrieval snippet limit");
   return {
     id: `candidate-${index}`,
@@ -99,23 +107,51 @@ const metadata = {
 if (values.mode === "counts") {
   // oxlint-disable-next-line typescript/unbound-method -- Forward the original receiver below.
   const original = Set.prototype.has;
+  const originalIterator = Set.prototype[Symbol.iterator];
   let tokenMemberships = 0;
+  let candidateVisits = 0;
   let result: Awaited<ReturnType<typeof run>>;
   try {
     // oxlint-disable-next-line eslint/no-extend-native -- Count without retaining mock call history; restored in finally.
     Set.prototype.has = function (this: Set<unknown>, value: unknown) {
       // Only Jaccard sees these token keys; hybrid range/project keys differ.
-      if (typeof value === "string" && /^m\d+_\d+$/u.test(value)) {
+      if (typeof value === "string" && /^(?:m\d+_\d+|c\d+)$/u.test(value)) {
         tokenMemberships++;
       }
       return original.call(this, value);
+    };
+    // oxlint-disable-next-line eslint/no-extend-native -- Count actual candidate visits without retaining elements; restored in finally.
+    Set.prototype[Symbol.iterator] = function* (this: Set<unknown>): SetIterator<unknown> {
+      const iterator: SetIterator<unknown> = originalIterator.call(this);
+      for (const value of iterator) {
+        // Only the MMR candidate set contains prepared relevance and similarity.
+        if (
+          value &&
+          typeof value === "object" &&
+          "maxSimilarity" in value &&
+          "relevance" in value
+        ) {
+          candidateVisits++;
+        }
+        yield value;
+      }
+      return undefined;
     };
     result = await run();
   } finally {
     // oxlint-disable-next-line eslint/no-extend-native -- Restore the original method after count-only instrumentation.
     Set.prototype.has = original;
+    // oxlint-disable-next-line eslint/no-extend-native -- Restore iteration after count-only instrumentation.
+    Set.prototype[Symbol.iterator] = originalIterator;
   }
-  console.log(JSON.stringify({ ...metadata, tokenMemberships, fingerprint: fingerprint(result) }));
+  console.log(
+    JSON.stringify({
+      ...metadata,
+      candidateVisits,
+      tokenMemberships,
+      fingerprint: fingerprint(result),
+    }),
+  );
 } else {
   assert.ok(global.gc, "Timing mode requires --expose-gc");
   const gc = global.gc;
