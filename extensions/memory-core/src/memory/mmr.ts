@@ -84,12 +84,7 @@ export function applyMMRToHybridResults<T extends MMRItem>(items: T[], lambda: n
       // Apply the previous selection's penalty before ranking, in the same pass.
       // Jaccard similarity cannot exceed 1, so saturated maxima need no update.
       if (previous && candidate.maxSimilarity !== 1) {
-        let sharedTokens = 0;
-        for (const id of candidate.tokenIds) {
-          if (previousTokenRound[id] === round) {
-            sharedTokens++;
-          }
-        }
+        const sharedTokens = countMarkedTokens(candidate.tokenIds, previousTokenRound, round);
         const similarity = similarityFromSharedTokens(candidate.text, previous.text, sharedTokens);
         if (similarity > candidate.maxSimilarity) {
           candidate.maxSimilarity = similarity;
@@ -112,4 +107,16 @@ export function applyMMRToHybridResults<T extends MMRItem>(items: T[], lambda: n
     previous = bestItem;
   }
   return selected;
+}
+
+// Kept out of the ranking loop so V8 optimizes it after a few calls; inlined, the
+// first search in a process ranked 48 candidates slower than Set lookups did.
+function countMarkedTokens(tokenIds: number[], marks: Uint32Array, round: number): number {
+  let marked = 0;
+  for (const id of tokenIds) {
+    if (marks[id] === round) {
+      marked++;
+    }
+  }
+  return marked;
 }

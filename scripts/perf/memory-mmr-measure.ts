@@ -14,6 +14,7 @@ const { values } = parseArgs({
     owner: { type: "string", default: "extensions/memory-core/src/memory/hybrid.ts" },
     workload: { type: "string", default: "duplicate-heavy" },
     mode: { type: "string", default: "timing" },
+    candidates: { type: "string", default: "400" },
     samples: { type: "string", default: "20" },
     warmup: { type: "string", default: "10" },
   },
@@ -24,6 +25,16 @@ assert.ok(
   ),
 );
 assert.ok(["timing", "counts"].includes(values.mode));
+// Merged MMR input size; half arrive as vector hits, half as keyword hits.
+// Default settings (6 results x candidate multiplier 4 per leg) give 48.
+const candidates = parseStrictIntegerOption({
+  raw: values.candidates,
+  label: "--candidates",
+  min: 2,
+  fallback: 400,
+});
+assert.ok(candidates % 2 === 0, "--candidates must be even");
+const perLeg = candidates / 2;
 const samples = parseStrictIntegerOption({
   raw: values.samples,
   label: "--samples",
@@ -41,12 +52,12 @@ const owner: typeof import("../../extensions/memory-core/src/memory/hybrid.js") 
 );
 const sharedTokens =
   values.workload === "overlapping" ? 20 : values.workload === "near-duplicate" ? 79 : 0;
-const rows = Array.from({ length: 400 }, (_row, index) => {
-  // Mixed: 300 entries across 10 duplicate groups, plus 100 distinct entries.
+const rows = Array.from({ length: candidates }, (_row, index) => {
+  // Mixed: three quarters across 10 duplicate groups, the rest distinct.
   const group =
     values.workload === "duplicate-heavy"
       ? 0
-      : values.workload === "mixed" && index < 300
+      : values.workload === "mixed" && index < candidates * 0.75
         ? index % 10
         : index;
   const snippet = Array.from({ length: 80 }, (_token, token) =>
@@ -63,10 +74,10 @@ const rows = Array.from({ length: 400 }, (_row, index) => {
   };
 });
 const vector = rows
-  .slice(0, 200)
+  .slice(0, perLeg)
   .map((row, index) => Object.assign({}, row, { vectorScore: 0.9 - (index % 10) * 0.01 }));
 const keyword = rows
-  .slice(200)
+  .slice(perLeg)
   .map((row, index) => Object.assign({}, row, { textScore: 0.9 - (index % 10) * 0.01 }));
 const inputJson = JSON.stringify({ vector, keyword });
 async function run() {
@@ -82,14 +93,14 @@ async function run() {
     merged,
     keyword,
     vectorCandidates: vector,
-    maxResults: 200,
+    maxResults: perLeg,
     minScore: 0.35,
   });
   return { merged, selected };
 }
 function fingerprint(result: Awaited<ReturnType<typeof run>>) {
-  assert.equal(result.merged.length, 400);
-  assert.equal(result.selected.length, 200);
+  assert.equal(result.merged.length, candidates);
+  assert.equal(result.selected.length, perLeg);
   assert.equal(JSON.stringify({ vector, keyword }), inputJson, "Input mutated");
   // Both complete order/scores and the selected public results participate.
   return hash("sha256", JSON.stringify(result), "hex");
