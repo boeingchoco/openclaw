@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { mock } from "node:test";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -116,36 +117,41 @@ const metadata = {
   tokensPerSnippet: 80,
 };
 if (values.mode === "counts") {
-  // oxlint-disable-next-line typescript/unbound-method -- Forward the original receiver below.
-  const original = Set.prototype.has;
-  // oxlint-disable-next-line typescript/unbound-method -- Forward the original receiver below.
+  // Only similarity work looks up these token keys; hybrid range/project keys differ.
+  const isFixtureToken = (value: unknown) =>
+    typeof value === "string" && /^(?:m\d+_\d+|c\d+)$/u.test(value);
+  // oxlint-disable-next-line typescript/unbound-method -- The probe forwards the original receiver.
+  const originalHas = Set.prototype.has;
+  // oxlint-disable-next-line typescript/unbound-method -- The probe forwards the original receiver.
   const originalGet = Map.prototype.get;
   const originalIterator = Set.prototype[Symbol.iterator];
   let tokenLookups = 0;
   let candidateVisits = 0;
-  let result: Awaited<ReturnType<typeof run>>;
-  // Only similarity work looks up these token keys; hybrid range/project keys differ.
-  const isFixtureToken = (value: unknown) =>
-    typeof value === "string" && /^(?:m\d+_\d+|c\d+)$/u.test(value);
-  try {
-    // oxlint-disable-next-line eslint/no-extend-native -- Count without retaining mock call history; restored in finally.
-    Set.prototype.has = function (this: Set<unknown>, value: unknown) {
-      if (isFixtureToken(value)) {
-        tokenLookups++;
-      }
-      return original.call(this, value);
-    };
-    // oxlint-disable-next-line eslint/no-extend-native -- Count token interning; restored in finally.
-    Map.prototype.get = function (this: Map<unknown, unknown>, key: unknown) {
+  // Each probe drops its call records as it runs; millions of retained records would dominate memory.
+  const has = mock.method(Set.prototype, "has", function (this: Set<unknown>, value: unknown) {
+    has.mock.resetCalls();
+    if (isFixtureToken(value)) {
+      tokenLookups++;
+    }
+    return originalHas.call(this, value);
+  });
+  const get = mock.method(
+    Map.prototype,
+    "get",
+    function (this: Map<unknown, unknown>, key: unknown) {
+      get.mock.resetCalls();
       if (isFixtureToken(key)) {
         tokenLookups++;
       }
       return originalGet.call(this, key);
-    };
-    // oxlint-disable-next-line eslint/no-extend-native -- Count actual candidate visits without retaining elements; restored in finally.
-    Set.prototype[Symbol.iterator] = function* (this: Set<unknown>): SetIterator<unknown> {
-      const iterator: SetIterator<unknown> = originalIterator.call(this);
-      for (const value of iterator) {
+    },
+  );
+  const iterate = mock.method(
+    Set.prototype,
+    Symbol.iterator,
+    function* (this: Set<unknown>): SetIterator<unknown> {
+      iterate.mock.resetCalls();
+      for (const value of originalIterator.call(this)) {
         // Only the MMR candidate set contains prepared relevance and similarity.
         if (
           value &&
@@ -158,15 +164,13 @@ if (values.mode === "counts") {
         yield value;
       }
       return undefined;
-    };
+    },
+  );
+  let result: Awaited<ReturnType<typeof run>>;
+  try {
     result = await run();
   } finally {
-    // oxlint-disable-next-line eslint/no-extend-native -- Restore the original method after count-only instrumentation.
-    Set.prototype.has = original;
-    // oxlint-disable-next-line eslint/no-extend-native -- Restore lookups after count-only instrumentation.
-    Map.prototype.get = originalGet;
-    // oxlint-disable-next-line eslint/no-extend-native -- Restore iteration after count-only instrumentation.
-    Set.prototype[Symbol.iterator] = originalIterator;
+    mock.restoreAll();
   }
   console.log(
     JSON.stringify({
