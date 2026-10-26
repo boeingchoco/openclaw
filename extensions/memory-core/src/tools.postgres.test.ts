@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
+import * as memorySessions from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchManager } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -317,6 +318,9 @@ describe.skipIf(!database.connection)("PostgreSQL memory_search product flows", 
     await write("main", "bounded.md", `boundedmarker ${"café unicode ".repeat(150)}`);
     await sync();
     const bounded = await search("boundedmarker", { maxResults: 1 });
+    expect(bounded, JSON.stringify(bounded)).toMatchObject({
+      results: [{ path: "memory/bounded.md" }],
+    });
     expect(bounded.results[0]!.snippet.length).toBeLessThanOrEqual(700);
     for (const query of ["() & | ! : * <-> \\", "日本語"]) {
       const result = await search(query);
@@ -332,6 +336,49 @@ describe.skipIf(!database.connection)("PostgreSQL memory_search product flows", 
       expect(result.error).toMatch(/4096|128/);
     }
     await expect(search(" ")).rejects.toThrow(/query/);
+  });
+
+  it("publishes dirty memory when an index request joins a targeted session pass", async () => {
+    await transcript("main", "concurrent-session", "A session updated alongside memory.");
+    const manager = await sync();
+    await write("main", "joined-memory.md", "joinedmemorymarker");
+    const planned = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const buildEntries = memorySessions.buildSessionEntries;
+    const planning = vi
+      .spyOn(memorySessions, "buildSessionEntries")
+      .mockImplementationOnce(async (...args) => {
+        const entries = await buildEntries(...args);
+        planned.resolve();
+        await resume.promise;
+        return entries;
+      });
+    const active = run(() =>
+      manager.sync!({
+        reason: "session-delta",
+        sessions: [{ agentId: "main", sessionId: "concurrent-session" }],
+      }),
+    );
+    void active.catch(() => undefined);
+    try {
+      await Promise.race([
+        planned.promise,
+        active.then(() => {
+          throw new Error("Expected targeted session planning");
+        }),
+      ]);
+      const joined = sync();
+      resume.resolve();
+      await Promise.all([active, joined]);
+      expect(await paths("joinedmemorymarker")).toEqual(["memory/joined-memory.md"]);
+    } finally {
+      resume.resolve();
+      try {
+        await active;
+      } finally {
+        planning.mockRestore();
+      }
+    }
   });
 
   it("caps the combined body and exact-path streams at 200 public results", async () => {

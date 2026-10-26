@@ -415,7 +415,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         throw err;
       }
     }
-    this.syncingMemoryWatchGeneration = this.memoryWatchGeneration;
+    // Targeted session passes do not consume pending memory-file changes.
+    if (!hasTargetedSessionSyncParams(params)) {
+      this.syncingMemoryWatchGeneration = this.memoryWatchGeneration;
+    }
     const run = async () => {
       this.syncIsBackground = options?.background ?? false;
       let outcome: MemorySyncOutcome;
