@@ -43,10 +43,8 @@ import {
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
-import {
-  evaluateAttemptDecisionToolPrefilter,
-  type DecisionPrefilterResult,
-} from "./attempt-decision-prefilter.js";
+import type { DecisionPrefilterResult } from "./attempt-decision-prefilter-policy.js";
+import { evaluateAttemptDecisionToolPrefilter } from "./attempt-decision-prefilter.js";
 import {
   normalizeCurrentPromptTextForLlmBoundary,
   usesEscapedRuntimeContext,
@@ -91,7 +89,8 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   isRawModelRun: boolean;
   orphanRepair?: OrphanRepairPlan;
   sessionAgentId: string;
-  runtimeModel: string;
+  /** Absent for a blind child, whose prompt never names its own model. */
+  runtimeModel?: string;
   systemPromptText: string;
   runAbortSignal?: AbortSignal;
   hasBaselineTools: () => boolean;

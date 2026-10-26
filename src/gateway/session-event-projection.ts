@@ -27,7 +27,7 @@ type PublicationDelivery = {
   payload: Record<string, unknown>;
   serializeSession: () => string;
   delivered: (client: GatewayClient) => void;
-  fieldRefs?: { indices: number[]; names: Set<string> };
+  fieldRefs?: { indices: number[]; omitted: Uint8Array };
 };
 
 /** Bind prepared rows without exposing their implementation to transport contracts. */
@@ -112,6 +112,7 @@ export function prepareSessionEventProjection(
       {
         row: GatewaySessionRow;
         rowFields?: Array<[string, unknown]>;
+        rowFieldIndices?: Map<string, number>;
         ancestors: ReturnType<typeof prepareSessionAncestor>[] | undefined;
         hiddenAncestors: Array<{ key: string; histories: Map<object, object> }>;
         ancestorInvalidations: Map<object, object> | undefined;
@@ -237,11 +238,12 @@ export function prepareSessionEventProjection(
       if (!projected) {
         let refs = fieldRefs ? delivery.fieldRefs : undefined;
         if (fieldRefs && !refs) {
-          refs = { indices: [], names: new Set() };
           // Indices address the reconstructed full row, independent of patch insertion order.
           const fields = (audience.rowFields ??= Object.entries(row)
             .filter(([, value]) => value !== undefined)
             .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+          audience.rowFieldIndices ??= new Map(fields.map(([field], index) => [field, index]));
+          refs = { indices: [], omitted: new Uint8Array(fields.length) };
           for (let index = 0; index < fields.length; index++) {
             const [field, value] = fields[index]!;
             if (
@@ -251,18 +253,22 @@ export function prepareSessionEventProjection(
               isDeepStrictEqual(delivery.payload[field], value)
             ) {
               refs.indices.push(index);
-              refs.names.add(field);
+              refs.omitted[index] = 1;
             }
           }
           delivery.fieldRefs = refs;
         }
         let wirePayload = delivery.payload;
         if (refs || omitMessage) {
-          // Copy retained fields in wire order without deleting properties from the variant.
+          // Copy retained fields in wire order; omitted fields need no entry tuples.
           wirePayload = Object.fromEntries(
-            Object.entries(delivery.payload).filter(
-              ([field]) => (!omitMessage || field !== "message") && !refs?.names.has(field),
-            ),
+            Object.keys(delivery.payload)
+              .filter(
+                (field) =>
+                  (!omitMessage || field !== "message") &&
+                  !refs?.omitted[audience.rowFieldIndices!.get(field) ?? -1],
+              )
+              .map((field) => [field, delivery.payload[field]]),
           );
           if (refs) {
             wirePayload.sessionFieldRefs = refs.indices;
