@@ -28,7 +28,6 @@ import {
   createCliRunnerPrepareFixture,
   createTestCliSessionBinding,
   createTestMcpLoopbackClientGrant,
-  createTestMcpLoopbackServerConfig,
   createWeatherSkillFixture,
 } from "../cli-runner.test-helpers.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../command/claude-cli-project-dir.js";
@@ -110,7 +109,6 @@ beforeEach(() => {
       ownerToken: "fixture-owner",
       nonOwnerToken: "fixture-reader",
     }),
-    createMcpLoopbackServerConfig: createTestMcpLoopbackServerConfig,
     mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
     bindMcpLoopbackClientGrantAdmission: () => true,
     revokeMcpLoopbackClientGrant: () => true,
@@ -214,6 +212,7 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
   // This is a stored v2026.10.3-format binding, not a migration. Its digest is
   // the stable loopback config hash: port-canonicalized, including Claude's
   // managed timeout, with no MCP topology change between the two code versions.
+  // ToolSearch deferral, on by default, must not change it either.
   replaceSessionEntrySync(sessionTarget, {
     sessionId: sessionTarget.sessionId,
     updatedAt: 2,
@@ -288,6 +287,7 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     completion: boolean,
     cliSessionBinding: ReturnType<typeof getCliSessionBinding>,
     changedPrompt = false,
+    turnConfig: OpenClawConfig = config,
   ) => {
     const sessionEntry = loadSessionEntry(sessionTarget);
     expect(sessionEntry).toMatchObject({
@@ -296,7 +296,7 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
       verboseLevel: "on",
     });
     return fixture.prepare({
-      config,
+      config: turnConfig,
       sessionEntry,
       sessionKey: sessionTarget.sessionKey,
       cliSessionBinding,
@@ -366,6 +366,22 @@ async function assertStoredConversationSurvivesUpgrade(toolSearch: boolean | und
     await executePreparedCliRun(drifted, nativeSessionId);
   } finally {
     await drifted.preparedBackend.cleanup?.();
+  }
+  if (toolSearch === false) {
+    // A session bound before ToolSearch deferral keeps its native history when discovery turns on.
+    const discovery = await prepareTurn(false, upgradedBinding, false, {
+      ...config,
+      tools: { ...config.tools, toolSearch: true },
+    });
+    try {
+      expect(discovery.reusableCliSession).toEqual({
+        mode: "reuse-with-drift",
+        sessionId: nativeSessionId,
+        drift: { reasons: ["system-prompt"] },
+      });
+    } finally {
+      await discovery.preparedBackend.cleanup?.();
+    }
   }
 
   expect(sent).toHaveLength(3);
